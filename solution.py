@@ -105,7 +105,7 @@ def page_kind(text: str) -> str:
 
 
 def extract_label(text: str, label: str) -> str:
-    match = re.search(rf"\b{label}[ \t]*:?[ \t]*([^|;\n]{1,90})", text, re.I)
+    match = re.search(rf"\b{label}[ \t]*:?[ \t]*([^|;\n]{{1,90}})", text, re.I)
     if match and normalize_space(match.group(1)):
         value = normalize_space(match.group(1))
         value = re.split(r"\s{2,}(?=[A-Z][A-Za-z ]{2,}:)", value)[0]
@@ -186,9 +186,9 @@ def parse_page(kind: str, text: str, parsed: dict[str, list[Evidence]]) -> str:
     # Structured labels are stronger evidence than page-title recognition.  We
     # therefore read label/value pairs on every visible page; page kind only
     # sets provenance precedence when multiple pages disagree.
-    applicant = value_before_label(text, "Applicant(?: Name)?", clean_name)
+    applicant = value_before_label(text, "Applicant Name", clean_name) or value_before_label(text, "Applicant", clean_name)
     if not applicant:
-        applicant = clean_name(extract_label(text, "Applicant(?: Name)?"))
+        applicant = clean_name(extract_label(text, "Applicant Name")) or clean_name(extract_label(text, "Applicant"))
     if not applicant:
         applicant = clean_name(extract_label(text, "Registry Name"))
     add(parsed, "applicant_name", applicant, kind, weight)
@@ -196,14 +196,15 @@ def parse_page(kind: str, text: str, parsed: dict[str, list[Evidence]]) -> str:
     add(parsed, "home_world", normalize_space(extract_label(text, "Home World")), kind, weight)
     visa = re.search(r"\b(XW[- ]?[12]|DIP[- ]?1|MED[- ]?3|TRANSIT[- ]?7)\b", text, re.I)
     add(parsed, "visa_class", visa.group(1).upper().replace(" ", "-") if visa else "", kind, weight)
-    sponsor = clean_sponsor(extract_label(text, "Sponsor(?: ID)?"))
+    sponsor = clean_sponsor(extract_label(text, "Sponsor ID")) or clean_sponsor(extract_label(text, "Sponsor"))
     if not sponsor:
-        sponsor = value_before_label(text, "Sponsor(?: ID)?", clean_sponsor)
+        sponsor = value_before_label(text, "Sponsor ID", clean_sponsor) or value_before_label(text, "Sponsor", clean_sponsor)
     if not sponsor:
         sponsor = clean_sponsor(text) if kind == "sponsor" else ""
     add(parsed, "sponsor_id", sponsor, kind, weight)
-    add(parsed, "arrival_date", clean_date(extract_label(text, "Arrival(?: Date)?")), kind, weight)
-    add(parsed, "declared_purpose", normalize_space(extract_label(text, "(?:Declared )?Purpose")), kind, weight)
+    add(parsed, "arrival_date", clean_date(extract_label(text, "Arrival Date")), kind, weight)
+    purpose = normalize_space(extract_label(text, "Declared Purpose")) or normalize_space(extract_label(text, "Purpose"))
+    add(parsed, "declared_purpose", purpose, kind, weight)
     status = re.search(r"\b(paid|unpaid|waived)\b", extract_label(text, "Fee Status"), re.I)
     add(parsed, "fee_status", status.group(1).lower() if status else "", kind, weight)
     add(parsed, "risk_flags", clean_flags(extract_label(text, "Observed Flags") or extract_label(text, "Risk Flags")), kind, weight)

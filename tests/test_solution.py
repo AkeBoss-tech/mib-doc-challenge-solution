@@ -11,6 +11,12 @@ class VisiblePipelineTests(unittest.TestCase):
             "paid",
         )
 
+    def test_label_value_can_share_a_line(self):
+        self.assertEqual(
+            solution.extract_label("Observed flags: biohazard_red", "Observed Flags"),
+            "biohazard_red",
+        )
+
     def test_name_can_precede_applicant_label(self):
         text = "Case ID\nMIB-000001\nIxodane Luzarn\nApplicant\nSpecies Code"
         self.assertEqual(
