@@ -87,14 +87,14 @@ def ocr(image: Image.Image, psm: int) -> str:
     return completed.stdout
 
 
-def visible_text(image: Image.Image) -> str:
-    # Two complementary page segmentation assumptions reduce a single-layout
-    # OCR miss without treating either pass as an approval-side confirmation.
+def visible_texts(image: Image.Image) -> tuple[str, ...]:
+    """Return independent visible OCR readings rather than choosing one early."""
     gray = ImageOps.grayscale(image)
     boosted = ImageEnhance.Contrast(gray).enhance(1.5)
     first = ocr(boosted, 6)
     second = ocr(boosted, 11)
-    return first if len(normalize_space(first)) >= len(normalize_space(second)) else second
+    readings = tuple(text for text in (first, second) if normalize_space(text))
+    return readings if len(set(readings)) > 1 else readings[:1]
 
 
 def page_kind(text: str) -> str:
@@ -255,11 +255,11 @@ def predict(pdf_path: Path) -> dict[str, object]:
     findings: list[str] = []
     try:
         for image in render_pages(pdf_path):
-            text = visible_text(image)
-            kind = page_kind(text)
-            finding = parse_page(kind, text, evidence)
-            if finding:
-                findings.append(finding)
+            for text in visible_texts(image):
+                kind = page_kind(text)
+                finding = parse_page(kind, text, evidence)
+                if finding:
+                    findings.append(finding)
     except (OSError, RuntimeError, subprocess.SubprocessError):
         pass
     row = {field: choose(field, evidence[field]) for field in FIELDS}
@@ -267,7 +267,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
     visible_clean_biometrics = any(
         item.source == "biometric" and item.value == "none"
         for item in evidence["risk_flags"]
-    )
+    ) and sum(item.source == "biometric" and item.value == "none" for item in evidence["risk_flags"]) >= 2
     visible_paid_fee = any(
         item.source == "fee" and item.value == "paid"
         for item in evidence["fee_status"]

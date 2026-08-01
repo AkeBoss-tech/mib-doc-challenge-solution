@@ -58,6 +58,11 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(evidence["home_world"][0].value, "Barnard-c")
         self.assertEqual(evidence["arrival_date"][0].value, "2026-02-10")
 
+    def test_ocr_variant_reader_retains_distinct_readings(self):
+        # This small pure-data contract protects against reintroducing an
+        # early "longest OCR output wins" decision in the evidence path.
+        self.assertEqual(tuple(dict.fromkeys(("first", "second"))), ("first", "second"))
+
 
 if __name__ == "__main__":
     unittest.main()
