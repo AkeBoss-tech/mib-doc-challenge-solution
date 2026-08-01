@@ -1,5 +1,6 @@
 import unittest
 from collections import defaultdict
+from dataclasses import replace
 
 from PIL import Image
 
@@ -185,6 +186,29 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(entry.conflicts, ("unpaid",))
         self.assertEqual(entry.candidates, (weak, strong))
         self.assertEqual(entry.resolution_reason, "highest_anchor_then_ocr_quality")
+
+    def test_sponsor_fallback_requires_two_high_quality_distinct_native_crops(self):
+        first = solution.CandidateValue(
+            "sponsor_id", "SPN-1234", "SPN-1234", 1, (1, 2, 30, 40), "label_value_roi",
+            ("crop", "native"), 93.0, 1.0, "SPN-1234",
+        )
+        second = replace(first, crop=(5, 6, 30, 40), ocr_quality=91.0)
+        entry = solution.LedgerEntry(
+            "sponsor_id", (first, second), "SPN-1234", "corroborated_equivalent_readings", (),
+        )
+        self.assertEqual(solution.corroborated_sponsor_fallback((entry,)), "SPN-1234")
+        self.assertEqual(
+            solution.corroborated_sponsor_fallback((replace(entry, candidates=(first,)),)),
+            "",
+        )
+        self.assertEqual(
+            solution.corroborated_sponsor_fallback((replace(entry, candidates=(first, replace(second, ocr_quality=84.9))),)),
+            "",
+        )
+        self.assertEqual(
+            solution.corroborated_sponsor_fallback((replace(entry, conflicts=("SPN-9999",)),)),
+            "",
+        )
 
 
 if __name__ == "__main__":

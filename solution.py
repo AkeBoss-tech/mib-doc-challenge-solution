@@ -153,6 +153,7 @@ ANCHOR_LABELS = {
     "disposition": ("finding", "disposition", "decision"),
 }
 MAX_REGION_PROPOSALS_PER_FIELD = 2
+SPONSOR_ROI_MIN_OCR_QUALITY = 85.0
 NON_NAME_LABELS = {
     normalized
     for labels in ANCHOR_LABELS.values()
@@ -445,6 +446,23 @@ def resolve_candidate_ledger(candidates: Iterable[CandidateValue]) -> tuple[Ledg
     return tuple(entries)
 
 
+def corroborated_sponsor_fallback(ledger: Iterable[LedgerEntry]) -> str:
+    """Promote only the grouped-validated, exact-anchor sponsor recovery path."""
+    entry = next((item for item in ledger if item.field == "sponsor_id"), None)
+    if entry is None or not entry.selected_value or entry.conflicts:
+        return ""
+    supporting = [
+        candidate
+        for candidate in entry.candidates
+        if candidate.normalized_value == entry.selected_value
+        and candidate.anchor_quality == 1.0
+        and candidate.ocr_quality >= SPONSOR_ROI_MIN_OCR_QUALITY
+        and candidate.transform_chain == ("crop", "native")
+    ]
+    distinct_crops = {candidate.crop for candidate in supporting}
+    return entry.selected_value if len(distinct_crops) >= 2 else ""
+
+
 def write_trace(
     pdf_path: Path,
     pages: list[dict[str, object]],
@@ -665,16 +683,18 @@ def predict(pdf_path: Path) -> dict[str, object]:
     findings: list[str] = []
     trace_pages: list[dict[str, object]] = []
     trace_candidates: list[CandidateValue] = []
+    sponsor_roi_candidates: list[CandidateValue] = []
     trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
     try:
         for page_number, image in enumerate(render_pages(pdf_path), start=1):
-            for text in visible_texts(image):
+            page_texts = visible_texts(image)
+            for text in page_texts:
                 kind = page_kind(text)
                 finding = parse_page(kind, text, evidence)
                 if finding:
                     findings.append(finding)
-            if trace_enabled:
-                diagnostics = page_diagnostics(image, page_number)
+            sponsor_page = any("sponsor" in text.casefold() for text in page_texts)
+            if trace_enabled or sponsor_page:
                 words = ocr_words(ImageEnhance.Contrast(ImageOps.grayscale(image)).enhance(1.5))
                 # Use the ordinary whole-page OCR as the layout classifier;
                 # the TSV pass supplies only visible geometry for proposals.
@@ -686,9 +706,22 @@ def predict(pdf_path: Path) -> dict[str, object]:
                     page_height=image.height,
                     layout_family=layout,
                 )
-                page_candidates = tuple(
+                sponsor_proposals = tuple(
+                    proposal for proposal in proposals
+                    if proposal.field_or_section == "sponsor_id"
+                )
+                sponsor_candidates = tuple(
+                    candidate
+                    for proposal in sponsor_proposals
+                    for candidate in read_roi_candidates(image, proposal)
+                )
+                sponsor_roi_candidates.extend(sponsor_candidates)
+            if trace_enabled:
+                diagnostics = page_diagnostics(image, page_number)
+                page_candidates = sponsor_candidates + tuple(
                     candidate
                     for proposal in proposals
+                    if proposal.field_or_section != "sponsor_id"
                     for candidate in read_roi_candidates(image, proposal)
                 )
                 trace_candidates.extend(page_candidates)
@@ -702,6 +735,12 @@ def predict(pdf_path: Path) -> dict[str, object]:
     if trace_enabled:
         write_trace(pdf_path, trace_pages, resolve_candidate_ledger(trace_candidates))
     row = {field: choose(field, evidence[field]) for field in FIELDS}
+    if row["sponsor_id"] == DEFAULTS["sponsor_id"]:
+        recovered_sponsor = corroborated_sponsor_fallback(
+            resolve_candidate_ledger(sponsor_roi_candidates),
+        )
+        if recovered_sponsor:
+            row["sponsor_id"] = recovered_sponsor
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])
     finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
