@@ -17,6 +17,21 @@ ledger. Native crop reads retry once at 2x scale only when field-type
 normalization fails. These records are not prediction inputs and are not part
 of a submission; approval recovery remains disabled.
 
+Summarize a trace run and compare it with a baseline using:
+
+```sh
+python tools/measure_experiment.py \
+  --predictions /tmp/candidate.jsonl \
+  --baseline /tmp/baseline.jsonl \
+  --trace-dir /tmp/traces \
+  --runtime-seconds 12.34
+```
+
+Add `--reference` and an explicit `--groups` JSON map to produce per-field
+accuracy, adjudication confusion, correctness Brier score, denied-case false
+approvals, and per-group results. The harness does not infer groups from case
+IDs or layouts.
+
 ## Run
 
 ```sh

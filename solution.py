@@ -424,7 +424,11 @@ def resolve_candidate_ledger(candidates: Iterable[CandidateValue]) -> tuple[Ledg
         else:
             winner = max(valid, key=lambda item: (item.anchor_quality, item.ocr_quality))
             selected = winner.normalized_value
-            reason = "corroborated_equivalent_readings" if len(valid) > 1 and len(values) == 1 else "highest_anchor_then_ocr_quality"
+            reason = (
+                "corroborated_equivalent_readings"
+                if len(valid) > 1 and len(values) == 1
+                else "highest_anchor_then_ocr_quality"
+            )
         entries.append(LedgerEntry(
             field=field,
             candidates=field_candidates,
