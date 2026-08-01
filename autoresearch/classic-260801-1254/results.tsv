@@ -1,0 +1,4 @@
+iteration	candidate	development_approved_tp	development_false_approvals	holdout_approved_tp	holdout_false_approvals	verdict
+0	incumbent_disabled	0	0	0	0	baseline
+1	two_ocr_exact_agreement	2	0	7	0	shadow_safe_low_recall
+2	exact_manual_plus_core_gate	3	0	3	0	keep_full_6_of_6_zero_cfa

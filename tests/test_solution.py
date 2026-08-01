@@ -115,6 +115,49 @@ class VisiblePipelineTests(unittest.TestCase):
             "NEEDS_REVIEW",
         )
 
+    def test_exact_manual_finding_ignores_unlabeled_watermark(self):
+        self.assertEqual(
+            solution.exact_manual_finding(
+                "Manual Adjudicator Note\nFinding: APPROVED\nReason: verified",
+            ),
+            "APPROVED",
+        )
+        self.assertEqual(
+            solution.exact_manual_finding("Manual Adjudicator Note\nSAMPLE DENIAL"),
+            "",
+        )
+
+    def test_manual_approval_requires_complete_nonadverse_corroboration(self):
+        row = dict(solution.DEFAULTS)
+        row.update({
+            "visa_class": "XW-2",
+            "fee_status": "paid",
+            "risk_flags": "none",
+            "arrival_date": "2026-01-01",
+            "sponsor_id": "SPN-1111",
+        })
+        self.assertEqual(
+            solution.decide(
+                row,
+                "",
+                visible_clean_biometrics=False,
+                visible_paid_fee=True,
+                explicit_manual_approval=True,
+            )[0],
+            "APPROVED",
+        )
+        row["risk_flags"] = "identity_conflict"
+        self.assertEqual(
+            solution.decide(
+                row,
+                "",
+                visible_clean_biometrics=False,
+                visible_paid_fee=True,
+                explicit_manual_approval=True,
+            )[0],
+            "NEEDS_REVIEW",
+        )
+
     def test_clean_ocr_without_approval_authority_stays_in_review(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "none", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})

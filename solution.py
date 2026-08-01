@@ -756,6 +756,15 @@ def parse_page(kind: str, text: str, parsed: dict[str, list[Evidence]]) -> str:
     return ""
 
 
+def exact_manual_finding(text: str) -> str:
+    """Return only an explicitly labeled finding on a visible manual-note page."""
+    if page_kind(text) != "note":
+        return ""
+    value = extract_label(text, "Finding")
+    match = re.fullmatch(r"(APPROVED|DENIED|NEEDS[ _-]?REVIEW)", value, re.I)
+    return match.group(1).upper().replace(" ", "_").replace("-", "_") if match else ""
+
+
 def choose(field: str, options: list[Evidence]) -> str:
     if not options:
         return DEFAULTS[field]
@@ -773,6 +782,7 @@ def decide(
     *,
     visible_clean_biometrics: bool,
     visible_paid_fee: bool,
+    explicit_manual_approval: bool = False,
 ) -> tuple[str, float]:
     flags = set(row["risk_flags"].split("|")) if row["risk_flags"] != "none" else set()
     if (
@@ -790,6 +800,16 @@ def decide(
         return "NEEDS_REVIEW", 0.46
     if row["fee_status"] == "waived" and row["visa_class"] != "DIP-1":
         return "NEEDS_REVIEW", 0.45
+    if (
+        explicit_manual_approval
+        and row["risk_flags"] == "none"
+        and row["fee_status"] in {"paid", "waived"}
+        and row["visa_class"] != "unknown"
+        and row["arrival_date"] != "1900-01-01"
+        and (row["visa_class"] == "DIP-1" or row["sponsor_id"] not in {"SPN-0000", *REVOKED_SPONSORS})
+        and (row["visa_class"] != "MED-3" or visible_clean_biometrics)
+    ):
+        return "APPROVED", 0.93
     # A clean approval requires affirmative fee and biometric evidence rather
     # than using an extraction default as a proxy for no risk.
     # Clean OCR is necessary but not yet sufficient for approval: public
@@ -804,6 +824,7 @@ def decide(
 def predict(pdf_path: Path) -> dict[str, object]:
     evidence: dict[str, list[Evidence]] = defaultdict(list)
     findings: list[str] = []
+    manual_findings: list[str] = []
     trace_pages: list[dict[str, object]] = []
     trace_candidates: list[CandidateValue] = []
     sponsor_roi_candidates: list[CandidateValue] = []
@@ -813,6 +834,9 @@ def predict(pdf_path: Path) -> dict[str, object]:
         for page_number, image in enumerate(render_pages(pdf_path), start=1):
             page_texts = visible_texts(image)
             for text in page_texts:
+                manual_finding = exact_manual_finding(text)
+                if manual_finding:
+                    manual_findings.append(manual_finding)
                 kind = page_kind(text)
                 finding = parse_page(kind, text, evidence)
                 if finding:
@@ -889,11 +913,16 @@ def predict(pdf_path: Path) -> dict[str, object]:
         item.source == "fee" and item.value == "paid"
         for item in evidence["fee_status"]
     )
+    explicit_manual_approval = (
+        bool(manual_findings)
+        and set(manual_findings) == {"APPROVED"}
+    )
     adjudication, confidence = decide(
         row,
         finding,
         visible_clean_biometrics=visible_clean_biometrics,
         visible_paid_fee=visible_paid_fee,
+        explicit_manual_approval=explicit_manual_approval,
     )
     return {"case_id": pdf_path.stem, **row, "adjudication": adjudication, "confidence": confidence}
 
