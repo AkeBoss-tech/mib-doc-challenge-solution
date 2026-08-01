@@ -154,6 +154,8 @@ ANCHOR_LABELS = {
 }
 MAX_REGION_PROPOSALS_PER_FIELD = 2
 SPONSOR_ROI_MIN_OCR_QUALITY = 85.0
+RISK_FLAG_FUZZY_MIN_SIMILARITY = 0.75
+RISK_FLAG_FUZZY_MIN_MARGIN = 0.20
 NON_NAME_LABELS = {
     normalized
     for labels in ANCHOR_LABELS.values()
@@ -596,6 +598,30 @@ def clean_flags(value: str) -> str:
         return "|".join(found)
     if re.search(r"\bnone\b|\bclear\b", value, re.I):
         return "none"
+    # Fuzzy recovery is restricted to short field-like values. It must have a
+    # unique nearest public flag, which keeps arbitrary note prose and the
+    # SAMPLE DENIAL watermark outside this evidence path.
+    tokens = re.findall(r"[a-z][a-z0-9_\-]{5,40}", value.casefold())
+    if len(tokens) <= 3 and len(normalize_space(value)) <= 80:
+        recovered: list[str] = []
+        for token in tokens:
+            candidate = token.replace("-", "_")
+            ranked = sorted([
+                (
+                    SequenceMatcher(None, candidate, flag).ratio(),
+                    flag,
+                )
+                for flag in DISQUALIFYING | REVIEW_FLAGS
+            ], reverse=True)
+            best_score, best_flag = ranked[0]
+            runner_up = ranked[1][0]
+            if (
+                best_score >= RISK_FLAG_FUZZY_MIN_SIMILARITY
+                and best_score - runner_up >= RISK_FLAG_FUZZY_MIN_MARGIN
+            ):
+                recovered.append(best_flag)
+        if recovered:
+            return "|".join(sorted(set(recovered)))
     return ""
 
 
@@ -631,6 +657,10 @@ def parse_page(kind: str, text: str, parsed: dict[str, list[Evidence]]) -> str:
     status = re.search(r"\b(paid|unpaid|waived)\b", extract_label(text, "Fee Status"), re.I)
     add(parsed, "fee_status", status.group(1).lower() if status else "", kind, weight)
     add(parsed, "risk_flags", clean_flags(extract_label(text, "Observed Flags") or extract_label(text, "Risk Flags")), kind, weight)
+    if kind == "registry":
+        registry_status = extract_label(text, "Registry Status")
+        if re.search(r"\bembargo\b", registry_status, re.I):
+            add(parsed, "registry_embargo_review", "true", kind, weight)
     if kind == "note":
         add(parsed, "risk_flags", clean_flags(extract_label(text, "(?:Risk )?Flag") or text), kind, weight)
         finding = re.search(r"\b(APPROVED|DENIED|NEEDS[ _-]?REVIEW)\b", extract_label(text, "Finding") or text, re.I)
@@ -657,7 +687,12 @@ def decide(
     visible_paid_fee: bool,
 ) -> tuple[str, float]:
     flags = set(row["risk_flags"].split("|")) if row["risk_flags"] != "none" else set()
-    if finding == "DENIED" or flags & DISQUALIFYING or row["fee_status"] == "unpaid" or row["visa_class"] == "TRANSIT-7":
+    if (
+        finding == "DENIED"
+        or flags & DISQUALIFYING
+        or row["fee_status"] == "unpaid"
+        or row["visa_class"] == "TRANSIT-7"
+    ):
         return "DENIED", 0.91
     if finding == "NEEDS_REVIEW" or flags & REVIEW_FLAGS:
         return "NEEDS_REVIEW", 0.58

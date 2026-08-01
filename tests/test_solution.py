@@ -55,6 +55,31 @@ class VisiblePipelineTests(unittest.TestCase):
             "DENIED",
         )
 
+    def test_short_unique_fuzzy_risk_read_recovers_but_watermark_does_not(self):
+        self.assertEqual(solution.clean_flags("bichaxard_yed"), "biohazard_red")
+        self.assertEqual(solution.clean_flags("SAMPLE DENIAL"), "")
+        self.assertEqual(solution.clean_flags("ordinary administrative narrative"), "")
+
+    def test_registry_embargo_status_is_review_evidence_not_denial_authority(self):
+        evidence = defaultdict(list)
+        solution.parse_page(
+            "registry",
+            "Planetary Registry Extract\nRegistry Status\nEMBARGO REVIEW\nArrival Date\n2026-03-18",
+            evidence,
+        )
+        self.assertEqual(evidence["registry_embargo_review"][0].value, "true")
+        self.assertEqual(evidence["risk_flags"], [])
+        row = dict(solution.DEFAULTS)
+        self.assertEqual(
+            solution.decide(
+                row,
+                "",
+                visible_clean_biometrics=False,
+                visible_paid_fee=False,
+            )[0],
+            "NEEDS_REVIEW",
+        )
+
     def test_clean_ocr_without_approval_authority_stays_in_review(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "none", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
