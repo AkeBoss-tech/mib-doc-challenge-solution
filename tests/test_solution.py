@@ -69,6 +69,15 @@ class VisiblePipelineTests(unittest.TestCase):
         # early "longest OCR output wins" decision in the evidence path.
         self.assertEqual(tuple(dict.fromkeys(("first", "second"))), ("first", "second"))
 
+    def test_category_snap_requires_a_clear_near_match(self):
+        original = solution.CATEGORY_VOCABULARY
+        try:
+            solution.CATEGORY_VOCABULARY = {"home_world": ("Barnard-c", "Mars Dome-7")}
+            self.assertEqual(solution.snap_category("home_world", "Barmard-c"), "Barnard-c")
+            self.assertEqual(solution.snap_category("home_world", "zzzz"), "zzzz")
+        finally:
+            solution.CATEGORY_VOCABULARY = original
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import date
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable
 
@@ -47,6 +48,19 @@ PAGE_MARKERS = {
     "registry": ("registry", "registry status", "registered"),
 }
 PRECEDENCE = {"note": 60, "intake": 50, "biometric": 40, "fee": 35, "sponsor": 30, "registry": 20, "other": 10}
+
+
+def load_category_vocabulary() -> dict[str, tuple[str, ...]]:
+    path = Path(__file__).with_name("models") / "public_category_vocab.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        fields = payload["fields"]
+        return {field: tuple(values) for field, values in fields.items()}
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+CATEGORY_VOCABULARY = load_category_vocabulary()
 
 
 @dataclass(frozen=True)
@@ -147,6 +161,27 @@ def clean_enum(value: str, choices: set[str]) -> str:
 def clean_species(value: str) -> str:
     candidate = normalize_space(value).upper().replace(" ", "_").replace("-", "_")
     return candidate if re.fullmatch(r"[A-Z][A-Z_]{1,36}", candidate) else ""
+
+
+def category_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.casefold())
+
+
+def snap_category(field: str, value: str) -> str:
+    """Correct only near-exact OCR misspellings in a small public schema set."""
+    options = CATEGORY_VOCABULARY.get(field, ())
+    if not value or value in {"unknown", ""} or not options:
+        return value
+    needle = category_key(value)
+    ranked = sorted(
+        ((SequenceMatcher(None, needle, category_key(option)).ratio(), option) for option in options),
+        reverse=True,
+    )
+    best_score, best_value = ranked[0]
+    runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
+    if best_score >= 0.86 and best_score - runner_up >= 0.06:
+        return best_value
+    return value
 
 
 def clean_date(value: str) -> str:
@@ -268,6 +303,8 @@ def predict(pdf_path: Path) -> dict[str, object]:
     except (OSError, RuntimeError, subprocess.SubprocessError):
         pass
     row = {field: choose(field, evidence[field]) for field in FIELDS}
+    for field in CATEGORY_VOCABULARY:
+        row[field] = snap_category(field, row[field])
     finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
     visible_clean_biometrics = any(
         item.source == "biometric" and item.value == "none"

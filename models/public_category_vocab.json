@@ -1,0 +1,46 @@
+{
+  "schema": "akeboss-public-category-vocabulary/v1",
+  "fields": {
+    "species_code": [
+      "ALPHA_DRACONIAN",
+      "ANDROMEDAN",
+      "AQUARIAN_MANTIS",
+      "ARCTURIAN",
+      "CENTAURI_SYNTH",
+      "JOVIAN_GASFORM",
+      "KAIJU_MICRO",
+      "LUNA_SECURID",
+      "ORION_GRAYS",
+      "SIRIUS_AVIAN",
+      "TRIANGULAN",
+      "VENUSIAN_MYCELIAL"
+    ],
+    "home_world": [
+      "Barnard-c",
+      "Eris Relay",
+      "Europa Station",
+      "Gliese-581g",
+      "Kepler-186f",
+      "Luyten-b",
+      "Mars Dome-7",
+      "Proxima-b",
+      "Sirius Outpost",
+      "TRAPPIST-1e",
+      "Titan Freeport",
+      "Wolf-1061c",
+      "Zeta Reticuli"
+    ],
+    "declared_purpose": [
+      "archive audit",
+      "cultural exchange",
+      "diplomatic",
+      "field repair",
+      "medical consult",
+      "reactor maintenance",
+      "research",
+      "transit",
+      "translation",
+      "xenobotany"
+    ]
+  }
+}
