@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import pypdfium2 as pdfium
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
@@ -98,6 +98,33 @@ class RegionProposal:
 
 
 @dataclass(frozen=True)
+class CandidateValue:
+    """One visible-pixel field reading retained in the shadow ledger."""
+
+    field: str
+    raw_text: str
+    normalized_value: str
+    page: int
+    crop: tuple[int, int, int, int]
+    reader_family: str
+    transform_chain: tuple[str, ...]
+    ocr_quality: float
+    anchor_quality: float
+    visible_evidence_excerpt: str
+
+
+@dataclass(frozen=True)
+class LedgerEntry:
+    """Resolution trace that never discards conflicting candidate readings."""
+
+    field: str
+    candidates: tuple[CandidateValue, ...]
+    selected_value: str
+    resolution_reason: str
+    conflicts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class OcrWord:
     text: str
     confidence: float
@@ -125,6 +152,7 @@ ANCHOR_LABELS = {
     "fee_status": ("fee status",),
     "disposition": ("finding", "disposition", "decision"),
 }
+MAX_REGION_PROPOSALS_PER_FIELD = 2
 
 
 def normalize_space(value: str) -> str:
@@ -157,12 +185,12 @@ def ocr(image: Image.Image, psm: int) -> str:
     return completed.stdout
 
 
-def ocr_words(image: Image.Image) -> tuple[OcrWord, ...]:
+def ocr_words(image: Image.Image, *, psm: int = 6) -> tuple[OcrWord, ...]:
     """Read visible word geometry for development-only layout measurement."""
     with tempfile.NamedTemporaryFile(suffix=".png") as temporary:
         image.save(temporary.name)
         completed = subprocess.run(
-            ["tesseract", temporary.name, "stdout", "--psm", "6", "-l", "eng", "tsv"],
+            ["tesseract", temporary.name, "stdout", "--psm", str(psm), "-l", "eng", "tsv"],
             capture_output=True, text=True, timeout=25, check=False,
         )
     if completed.returncode not in (0, 1):
@@ -241,21 +269,35 @@ def propose_regions(
         ordered = sorted(line_words, key=lambda word: word.left)
         observed = " ".join(word.text for word in ordered)
         for field, labels in ANCHOR_LABELS.items():
-            quality = max(anchor_similarity(observed, label) for label in labels)
+            matches: list[tuple[float, int, int, int]] = []
+            for label in labels:
+                label_word_count = len(normalized_anchor(label).split())
+                # The label itself determines the crop origin. Values on the
+                # same OCR line must not be mistaken for part of the anchor.
+                for start in range(len(ordered)):
+                    stop = min(len(ordered), start + label_word_count + 1)
+                    for end in range(start + 1, stop + 1):
+                        segment = " ".join(word.text for word in ordered[start:end])
+                        matches.append((anchor_similarity(segment, label), label_word_count, start, end))
+            quality, _, start, end = max(
+                matches,
+                key=lambda item: (item[0], item[1], -abs((item[3] - item[2]) - item[1])),
+                default=(0.0, 0, 0, 0),
+            )
             # A small edit tolerance accommodates normal OCR substitutions,
             # while excluding unrelated prose as an anchor.
             if quality < 0.84:
                 continue
-            left = min(word.left for word in ordered)
-            top = min(word.top for word in ordered)
-            right = max(word.left + word.width for word in ordered)
-            bottom = max(word.top + word.height for word in ordered)
+            anchor_words = ordered[start:end]
+            top = min(word.top for word in anchor_words)
+            right = max(word.left + word.width for word in anchor_words)
+            bottom = max(word.top + word.height for word in anchor_words)
             line_height = max(1, bottom - top)
             proposals.append(RegionProposal(
                 field_or_section=field,
                 page=page,
                 bounding_region=(
-                    max(0, right - line_height),
+                    min(page_width, right + max(1, line_height // 3)),
                     max(0, top - line_height),
                     page_width,
                     min(page_height, bottom + (line_height * 5)),
@@ -265,17 +307,150 @@ def propose_regions(
                 layout_family=layout_family,
                 proposed_reader="label_value_roi",
             ))
-    return tuple(proposals)
+    # Repeated headings are useful corroboration, but a damaged or adversarial
+    # page must not cause unbounded crop OCR. Two visible occurrences preserve
+    # an alternate reading while bounding each field's per-page work.
+    bounded: list[RegionProposal] = []
+    counts: dict[str, int] = defaultdict(int)
+    for proposal in proposals:
+        if counts[proposal.field_or_section] < MAX_REGION_PROPOSALS_PER_FIELD:
+            bounded.append(proposal)
+            counts[proposal.field_or_section] += 1
+    return tuple(bounded)
 
 
-def write_trace(pdf_path: Path, pages: list[dict[str, object]]) -> None:
+def normalize_candidate(field: str, raw_text: str) -> str:
+    """Normalize a crop reading by expected field type without policy logic."""
+    rows = [normalize_space(line) for line in raw_text.splitlines() if normalize_space(line)]
+    first = rows[0] if rows else ""
+    if field == "applicant_name":
+        return clean_name(first)
+    if field == "species_code":
+        return clean_species(first)
+    if field in {"home_world", "declared_purpose"}:
+        return first
+    if field == "visa_class":
+        match = re.search(r"\b(XW[- ]?[12]|DIP[- ]?1|MED[- ]?3|TRANSIT[- ]?7)\b", raw_text, re.I)
+        return match.group(1).upper().replace(" ", "-") if match else ""
+    if field == "sponsor_id":
+        return clean_sponsor(raw_text)
+    if field == "arrival_date":
+        return clean_date(raw_text)
+    if field == "risk_flags":
+        return clean_flags(raw_text)
+    if field == "fee_status":
+        match = re.search(r"\b(paid|unpaid|waived)\b", raw_text, re.I)
+        return match.group(1).lower() if match else ""
+    if field == "disposition":
+        match = re.search(r"\b(APPROVED|DENIED|NEEDS[ _-]?REVIEW)\b", raw_text, re.I)
+        return match.group(1).upper().replace(" ", "_").replace("-", "_") if match else ""
+    return first
+
+
+def ocr_with_quality(image: Image.Image, psm: int) -> tuple[str, float]:
+    words = ocr_words(image, psm=psm)
+    lines: dict[tuple[int, int, int], list[OcrWord]] = defaultdict(list)
+    for word in words:
+        lines[(word.block, word.paragraph, word.line)].append(word)
+    text = "\n".join(
+        " ".join(word.text for word in sorted(line_words, key=lambda item: item.left))
+        for _, line_words in sorted(lines.items())
+    )
+    quality = sum(word.confidence for word in words) / len(words) if words else 0.0
+    return text, round(quality, 3)
+
+
+def read_roi_candidates(
+    image: Image.Image,
+    proposal: RegionProposal,
+    *,
+    read_variant: Callable[[Image.Image, int], tuple[str, float]] = ocr_with_quality,
+) -> tuple[CandidateValue, ...]:
+    """Run a bounded, validation-triggered ROI retry in trace-only shadow mode."""
+    left, top, right, bottom = proposal.bounding_region
+    crop_box = (
+        max(0, min(image.width, left)),
+        max(0, min(image.height, top)),
+        max(0, min(image.width, right)),
+        max(0, min(image.height, bottom)),
+    )
+    if crop_box[0] >= crop_box[2] or crop_box[1] >= crop_box[3]:
+        return ()
+    native = image.crop(crop_box)
+    variants = (
+        (native, 6, ("crop", "native")),
+        (
+            native.resize((native.width * 2, native.height * 2), Image.Resampling.LANCZOS),
+            7,
+            ("crop", "rescale_2x"),
+        ),
+    )
+    candidates: list[CandidateValue] = []
+    for variant, psm, transforms in variants:
+        raw_text, quality = read_variant(variant, psm)
+        raw_text = raw_text.strip()
+        normalized = normalize_candidate(proposal.field_or_section, raw_text)
+        candidates.append(CandidateValue(
+            field=proposal.field_or_section,
+            raw_text=raw_text,
+            normalized_value=normalized,
+            page=proposal.page,
+            crop=crop_box,
+            reader_family=proposal.proposed_reader,
+            transform_chain=transforms,
+            ocr_quality=quality,
+            anchor_quality=proposal.anchor_quality,
+            visible_evidence_excerpt=normalize_space(raw_text)[:160],
+        ))
+        # Retry only a structurally invalid/missing native read. This avoids
+        # applying an unmeasured quality threshold and bounds work to 2 reads.
+        if normalized:
+            break
+    return tuple(candidates)
+
+
+def resolve_candidate_ledger(candidates: Iterable[CandidateValue]) -> tuple[LedgerEntry, ...]:
+    """Resolve shadow candidates while retaining every conflict and source."""
+    grouped: dict[str, list[CandidateValue]] = defaultdict(list)
+    for candidate in candidates:
+        grouped[candidate.field].append(candidate)
+    entries: list[LedgerEntry] = []
+    for field in sorted(grouped):
+        field_candidates = tuple(grouped[field])
+        valid = [candidate for candidate in field_candidates if candidate.normalized_value]
+        values = sorted({candidate.normalized_value for candidate in valid})
+        if not valid:
+            selected, reason = "", "no_valid_candidate"
+        else:
+            winner = max(valid, key=lambda item: (item.anchor_quality, item.ocr_quality))
+            selected = winner.normalized_value
+            reason = "corroborated_equivalent_readings" if len(valid) > 1 and len(values) == 1 else "highest_anchor_then_ocr_quality"
+        entries.append(LedgerEntry(
+            field=field,
+            candidates=field_candidates,
+            selected_value=selected,
+            resolution_reason=reason,
+            conflicts=tuple(value for value in values if value != selected),
+        ))
+    return tuple(entries)
+
+
+def write_trace(
+    pdf_path: Path,
+    pages: list[dict[str, object]],
+    ledger: tuple[LedgerEntry, ...],
+) -> None:
     """Persist optional visible-pixel development traces outside predictions."""
     directory = os.environ.get("MIB_TRACE_DIR")
     if not directory:
         return
     destination = Path(directory)
     destination.mkdir(parents=True, exist_ok=True)
-    payload = {"case_id": pdf_path.stem, "pages": pages}
+    payload = {
+        "case_id": pdf_path.stem,
+        "pages": pages,
+        "evidence_ledger": [asdict(entry) for entry in ledger],
+    }
     temporary = destination / f".{pdf_path.stem}.tmp"
     temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     temporary.replace(destination / f"{pdf_path.stem}.trace.json")
@@ -474,6 +649,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
     evidence: dict[str, list[Evidence]] = defaultdict(list)
     findings: list[str] = []
     trace_pages: list[dict[str, object]] = []
+    trace_candidates: list[CandidateValue] = []
     trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
     try:
         for page_number, image in enumerate(render_pages(pdf_path), start=1):
@@ -495,14 +671,21 @@ def predict(pdf_path: Path) -> dict[str, object]:
                     page_height=image.height,
                     layout_family=layout,
                 )
+                page_candidates = tuple(
+                    candidate
+                    for proposal in proposals
+                    for candidate in read_roi_candidates(image, proposal)
+                )
+                trace_candidates.extend(page_candidates)
                 trace_pages.append({
                     "diagnostics": asdict(diagnostics),
                     "region_proposals": [asdict(proposal) for proposal in proposals],
+                    "roi_candidates": [asdict(candidate) for candidate in page_candidates],
                 })
     except (OSError, RuntimeError, subprocess.SubprocessError):
         pass
     if trace_enabled:
-        write_trace(pdf_path, trace_pages)
+        write_trace(pdf_path, trace_pages, resolve_candidate_ledger(trace_candidates))
     row = {field: choose(field, evidence[field]) for field in FIELDS}
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])

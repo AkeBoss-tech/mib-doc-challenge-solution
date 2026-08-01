@@ -105,11 +105,66 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(proposal.proposed_reader, "label_value_roi")
         self.assertEqual(proposal.anchor_quality, 1.0)
         self.assertNotIn("paid", proposal.field_or_section)
+        self.assertLess(proposal.bounding_region[0], 76)
         self.assertEqual(proposal.bounding_region[2:], (200, 80))
 
     def test_anchor_matching_tolerates_small_ocr_error_but_not_unrelated_text(self):
         self.assertGreaterEqual(solution.anchor_similarity("Fee Statu5", "fee status"), 0.84)
         self.assertLess(solution.anchor_similarity("Narrative explanation", "fee status"), 0.84)
+
+    def test_region_proposals_are_bounded_per_field_and_page(self):
+        words = tuple(
+            word
+            for line in range(1, 5)
+            for word in (
+                solution.OcrWord("Fee", 94, 10, line * 20, 20, 10, line, 1, 1),
+                solution.OcrWord("Status", 95, 33, line * 20, 35, 10, line, 1, 1),
+            )
+        )
+        proposals = solution.propose_regions(
+            words, page=1, page_width=200, page_height=300, layout_family="fee",
+        )
+        self.assertEqual(len(proposals), solution.MAX_REGION_PROPOSALS_PER_FIELD)
+
+    def test_roi_reader_retries_only_after_invalid_native_read(self):
+        image = Image.new("RGB", (100, 50), "white")
+        proposal = solution.RegionProposal(
+            "fee_status", 1, (10, 10, 90, 40), "Fee Status", 0.95, "fee", "label_value_roi",
+        )
+        calls = []
+
+        def read_variant(crop, psm):
+            calls.append((crop.size, psm))
+            return ("unreadable", 12.0) if len(calls) == 1 else ("paid", 96.0)
+
+        candidates = solution.read_roi_candidates(image, proposal, read_variant=read_variant)
+        self.assertEqual(calls, [((80, 30), 6), ((160, 60), 7)])
+        self.assertEqual([item.normalized_value for item in candidates], ["", "paid"])
+        self.assertEqual(candidates[1].transform_chain, ("crop", "rescale_2x"))
+
+        calls.clear()
+        candidates = solution.read_roi_candidates(
+            image,
+            proposal,
+            read_variant=lambda crop, psm: (calls.append((crop.size, psm)) or "waived", 91.0),
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(calls, [((80, 30), 6)])
+
+    def test_shadow_ledger_retains_conflict_and_respects_anchor_priority(self):
+        strong = solution.CandidateValue(
+            "fee_status", "paid", "paid", 1, (1, 2, 3, 4), "label_value_roi",
+            ("crop", "native"), 75.0, 0.97, "paid",
+        )
+        weak = solution.CandidateValue(
+            "fee_status", "unpaid", "unpaid", 2, (5, 6, 7, 8), "label_value_roi",
+            ("crop", "native"), 99.0, 0.85, "unpaid",
+        )
+        entry = solution.resolve_candidate_ledger((weak, strong))[0]
+        self.assertEqual(entry.selected_value, "paid")
+        self.assertEqual(entry.conflicts, ("unpaid",))
+        self.assertEqual(entry.candidates, (weak, strong))
+        self.assertEqual(entry.resolution_reason, "highest_anchor_then_ocr_quality")
 
 
 if __name__ == "__main__":
