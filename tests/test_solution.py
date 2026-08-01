@@ -13,6 +13,12 @@ class VisiblePipelineTests(unittest.TestCase):
             "paid",
         )
 
+    def test_optional_label_suffix_is_not_returned_as_multiline_value(self):
+        self.assertEqual(
+            solution.extract_label("Species Code\nVENUSIAN_MYCELIAL", "Species(?: Code)?"),
+            "VENUSIAN_MYCELIAL",
+        )
+
     def test_label_value_can_share_a_line(self):
         self.assertEqual(
             solution.extract_label("Observed flags: biohazard_red", "Observed Flags"),
@@ -25,6 +31,20 @@ class VisiblePipelineTests(unittest.TestCase):
             solution.value_before_label(text, "Applicant(?: Name)?", solution.clean_name),
             "Ixodane Luzarn",
         )
+
+    def test_applicant_after_label_wins_over_nearby_case_id_label(self):
+        evidence = defaultdict(list)
+        solution.parse_page(
+            "intake",
+            "Case ID\nMIB-000001\nApplicant\nMiraquell Ixovara\nSpecies Code\nJOVIAN_GASFORM",
+            evidence,
+        )
+        self.assertEqual(evidence["applicant_name"][0].value, "Miraquell Ixovara")
+        self.assertEqual(evidence["species_code"][0].value, "JOVIAN_GASFORM")
+
+    def test_schema_label_is_not_a_person_name(self):
+        self.assertEqual(solution.clean_name("Case ID"), "")
+        self.assertEqual(solution.clean_name("Species Code"), "")
 
     def test_disqualifying_flag_cannot_approve(self):
         row = dict(solution.DEFAULTS)

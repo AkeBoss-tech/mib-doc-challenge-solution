@@ -153,6 +153,12 @@ ANCHOR_LABELS = {
     "disposition": ("finding", "disposition", "decision"),
 }
 MAX_REGION_PROPOSALS_PER_FIELD = 2
+NON_NAME_LABELS = {
+    normalized
+    for labels in ANCHOR_LABELS.values()
+    for label in labels
+    for normalized in (re.sub(r"[^a-z0-9]+", " ", label.casefold()).strip(),)
+} | {"case id", "primary intake record", "passport image"}
 
 
 def normalize_space(value: str) -> str:
@@ -478,16 +484,19 @@ def page_kind(text: str) -> str:
 
 
 def extract_label(text: str, label: str) -> str:
-    match = re.search(rf"\b{label}[ \t]*:?[ \t]*([^|;\n]{{1,90}})", text, re.I)
-    if match and normalize_space(match.group(1)):
-        value = normalize_space(match.group(1))
-        value = re.split(r"\s{2,}(?=[A-Z][A-Za-z ]{2,}:)", value)[0]
-        return value.strip(" .,:;")
+    # Prefer an exact label row before trying an inline value. Otherwise a
+    # pattern such as ``Species(?: Code)?`` can backtrack at a newline and
+    # incorrectly return the optional label word ``Code`` as the value.
     rows = [normalize_space(line) for line in text.splitlines() if normalize_space(line)]
     label_re = re.compile(rf"^{label}\s*:?$", re.I)
     for index, row in enumerate(rows):
         if label_re.fullmatch(row) and index + 1 < len(rows):
             return rows[index + 1].strip(" .,:;")
+    match = re.search(rf"\b{label}[ \t]*:?[ \t]*([^|;\n]{{1,90}})", text, re.I)
+    if match and normalize_space(match.group(1)):
+        value = normalize_space(match.group(1))
+        value = re.split(r"\s{2,}(?=[A-Z][A-Za-z ]{2,}:)", value)[0]
+        return value.strip(" .,:;")
     return ""
 
 
@@ -505,6 +514,8 @@ def value_before_label(text: str, label: str, validator) -> str:
 
 
 def clean_name(value: str) -> str:
+    if normalized_anchor(value) in NON_NAME_LABELS:
+        return ""
     words = re.findall(r"[A-Za-z][A-Za-z'-]*", value)
     return " ".join(word[:1].upper() + word[1:].lower() for word in words[:4]) if len(words) >= 2 else ""
 
@@ -580,9 +591,9 @@ def parse_page(kind: str, text: str, parsed: dict[str, list[Evidence]]) -> str:
     # Structured labels are stronger evidence than page-title recognition.  We
     # therefore read label/value pairs on every visible page; page kind only
     # sets provenance precedence when multiple pages disagree.
-    applicant = value_before_label(text, "Applicant Name", clean_name) or value_before_label(text, "Applicant", clean_name)
+    applicant = clean_name(extract_label(text, "Applicant Name")) or clean_name(extract_label(text, "Applicant"))
     if not applicant:
-        applicant = clean_name(extract_label(text, "Applicant Name")) or clean_name(extract_label(text, "Applicant"))
+        applicant = value_before_label(text, "Applicant Name", clean_name) or value_before_label(text, "Applicant", clean_name)
     if not applicant:
         applicant = clean_name(extract_label(text, "Registry Name"))
     add(parsed, "applicant_name", applicant, kind, weight)
