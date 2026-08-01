@@ -1,0 +1,11 @@
+iteration	candidate	full_score	extraction	classification	calibration	cfa	runtime_seconds_per_pdf	verdict
+0	incumbent	102.916176	37.535556	52.070000	13.310620	0	0.970000	baseline
+1	global_rotation					0		discard_sparse_holdout_gain
+2	generic_roi_promotion					0		discard_no_correct_default_recoveries
+3	high_resolution_retry					0		discard_low_parser_yield
+4	reason_specific_calibration	104.951332	37.535556	52.070000	15.345776	0	0.970000	keep_in_combined_candidate
+5	biometric_band_2x					0		discard_low_score_per_runtime
+6	unique_sponsor_date_patterns					0		discard_regressions
+7	evidence_consensus					0		discard_field_regressions
+8	official_tessdata_best					0		discard_balanced_correct_wrong_yield
+9	authority_routing_category_recovery	111.791176	39.245556	57.050000	15.495620	0	1.214980	keep_full_gate

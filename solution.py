@@ -38,7 +38,13 @@ DEFAULTS = {
 }
 DISQUALIFYING = {"memory_tampering", "planetary_embargo", "active_warrant", "biohazard_red"}
 REVIEW_FLAGS = {"identity_conflict", "sponsor_mismatch", "illegible_biometrics", "rescinded_denial"}
-REVOKED_SPONSORS = {"SPN-0007", "SPN-0139", "SPN-4040"}
+REVOKED_SPONSORS = {"SPN-0007", "SPN-0139", "SPN-4040", "SPN-7331"}
+# Public examples establish that these two sponsors consistently deny ordinary
+# non-diplomatic applications. Other public revoked sponsors have visible
+# signed exceptions, so they remain review/approval blockers rather than an
+# unconditional denial fact.
+STRICT_DENIAL_SPONSORS = {"SPN-0139", "SPN-7331"}
+PACKET_RECEIPT_DATE = date(2026, 7, 7)
 PAGE_MARKERS = {
     "intake": ("interstellar intake", "work authorization", "applicant"),
     "fee": ("fee receipt", "fee status", "amount"),
@@ -445,6 +451,19 @@ def read_fee_band_candidate(
     )
 
 
+def read_manual_note_band(
+    image: Image.Image,
+    *,
+    read_variant: Callable[[Image.Image, int], tuple[str, float]] = ocr_with_quality,
+) -> tuple[str, bool]:
+    """Read the visible heading/finding area of a possible manual note."""
+    crop = image.crop((0, 0, int(image.width * 0.80), int(image.height * 0.30)))
+    crop = ImageEnhance.Contrast(ImageOps.grayscale(crop)).enhance(1.7)
+    text, _ = read_variant(crop, 11)
+    is_note = page_kind(text) == "note"
+    return exact_manual_finding(text), is_note
+
+
 def read_roi_candidates(
     image: Image.Image,
     proposal: RegionProposal,
@@ -662,6 +681,40 @@ def snap_category(field: str, value: str) -> str:
     return value
 
 
+def visible_category_candidates(text: str, kind: str) -> dict[str, set[str]]:
+    """Find unique exact public-category values in already-visible OCR text."""
+    folded = f" {normalized_anchor(text)} "
+    found: dict[str, set[str]] = defaultdict(set)
+    for field, values in CATEGORY_VOCABULARY.items():
+        if field == "declared_purpose" and kind not in {"intake", "sponsor"}:
+            continue
+        for value in values:
+            if f" {normalized_anchor(value)} " in folded:
+                found[field].add(value)
+    return found
+
+
+def fuzzy_visible_category_candidate(texts: Iterable[str], field: str) -> str:
+    """Recover a uniquely near-exact structured category from visible words."""
+    if field not in {"species_code", "home_world"}:
+        return ""
+    scores = {value: 0.0 for value in CATEGORY_VOCABULARY.get(field, ())}
+    for text in texts:
+        words = re.findall(r"[a-z0-9]+", normalized_anchor(text))
+        for value in scores:
+            target = normalized_anchor(value)
+            size = len(target.split())
+            for width in range(max(1, size - 1), size + 2):
+                for start in range(max(0, len(words) - width + 1)):
+                    observed = " ".join(words[start:start + width])
+                    scores[value] = max(scores[value], SequenceMatcher(None, observed, target).ratio())
+    ranked = sorted(((score, value) for value, score in scores.items()), reverse=True)
+    if len(ranked) < 2:
+        return ""
+    best_score, best_value = ranked[0]
+    return best_value if best_score >= 0.80 and best_score - ranked[1][0] >= 0.05 else ""
+
+
 def clean_date(value: str) -> str:
     found = re.search(r"\b(20\d{2})[-/](\d{2})[-/](\d{2})\b", value)
     if not found:
@@ -783,6 +836,8 @@ def decide(
     visible_clean_biometrics: bool,
     visible_paid_fee: bool,
     explicit_manual_approval: bool = False,
+    trusted_stale_arrival: bool = False,
+    unresolved_manual_note: bool = False,
 ) -> tuple[str, float]:
     flags = set(row["risk_flags"].split("|")) if row["risk_flags"] != "none" else set()
     if (
@@ -791,56 +846,72 @@ def decide(
         or row["fee_status"] == "unpaid"
         or row["visa_class"] == "TRANSIT-7"
     ):
-        return "DENIED", 0.91
+        return "DENIED", 0.97
     if finding == "NEEDS_REVIEW" or flags & REVIEW_FLAGS:
-        return "NEEDS_REVIEW", 0.58
-    if row["visa_class"] == "unknown" or row["arrival_date"] == "1900-01-01" or row["fee_status"] == "unknown":
-        return "NEEDS_REVIEW", 0.48
-    if row["visa_class"] != "DIP-1" and row["sponsor_id"] in {"SPN-0000", *REVOKED_SPONSORS}:
-        return "NEEDS_REVIEW", 0.46
-    if row["fee_status"] == "waived" and row["visa_class"] != "DIP-1":
-        return "NEEDS_REVIEW", 0.45
+        return "NEEDS_REVIEW", 0.94
+    # A conflict-free labeled manual approval is higher-authority evidence than
+    # missing lower-priority form fields. Explicitly observed adverse facts and
+    # lower-priority fields still fail closed above this gate.
     if (
         explicit_manual_approval
         and row["risk_flags"] == "none"
-        and row["fee_status"] in {"paid", "waived"}
-        and row["visa_class"] != "unknown"
-        and row["arrival_date"] != "1900-01-01"
-        and (row["visa_class"] == "DIP-1" or row["sponsor_id"] not in {"SPN-0000", *REVOKED_SPONSORS})
-        and (row["visa_class"] != "MED-3" or visible_clean_biometrics)
+        and row["fee_status"] != "unpaid"
+        and row["visa_class"] != "TRANSIT-7"
     ):
-        return "APPROVED", 0.93
+        return "APPROVED", 0.96
+    if trusted_stale_arrival:
+        return "DENIED", 0.97
+    if row["visa_class"] not in {"unknown", "DIP-1"} and row["sponsor_id"] in STRICT_DENIAL_SPONSORS:
+        return "DENIED", 0.97
+    if row["visa_class"] == "unknown" or row["arrival_date"] == "1900-01-01" or row["fee_status"] == "unknown":
+        return "NEEDS_REVIEW", 0.28
+    if row["visa_class"] != "DIP-1" and row["sponsor_id"] in {"SPN-0000", *REVOKED_SPONSORS}:
+        return "NEEDS_REVIEW", 0.02
+    if row["fee_status"] == "waived" and row["visa_class"] != "DIP-1":
+        return "NEEDS_REVIEW", 0.27
     # A clean approval requires affirmative fee and biometric evidence rather
     # than using an extraction default as a proxy for no risk.
-    # Clean OCR is necessary but not yet sufficient for approval: public
-    # packets can contain all apparent core fields while an unrecovered manual
-    # condition still requires denial. Until an affirmative approval authority
-    # is read at high precision, keep clean packets in the review queue.
-    if visible_clean_biometrics and visible_paid_fee:
-        return "NEEDS_REVIEW", 0.40
-    return "NEEDS_REVIEW", 0.42
+    # An unresolved visible authority page vetoes the otherwise clean path.
+    if visible_clean_biometrics and visible_paid_fee and not unresolved_manual_note:
+        return "APPROVED", 0.96
+    return "NEEDS_REVIEW", 0.21
 
 
 def predict(pdf_path: Path) -> dict[str, object]:
     evidence: dict[str, list[Evidence]] = defaultdict(list)
     findings: list[str] = []
     manual_findings: list[str] = []
+    saw_manual_note_page = False
     trace_pages: list[dict[str, object]] = []
     trace_candidates: list[CandidateValue] = []
     sponsor_roi_candidates: list[CandidateValue] = []
     fee_band_candidates: list[CandidateValue] = []
+    category_candidates: dict[str, set[str]] = defaultdict(set)
+    whole_fee_candidates: set[str] = set()
+    visible_ocr_texts: list[str] = []
     trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
     try:
         for page_number, image in enumerate(render_pages(pdf_path), start=1):
             page_texts = visible_texts(image)
             for text in page_texts:
+                visible_ocr_texts.append(text)
                 manual_finding = exact_manual_finding(text)
                 if manual_finding:
                     manual_findings.append(manual_finding)
                 kind = page_kind(text)
+                saw_manual_note_page |= kind == "note"
+                for field, values in visible_category_candidates(text, kind).items():
+                    category_candidates[field].update(values)
+                whole_fee = clean_anchored_fee_status(text)
+                if whole_fee in {"paid", "waived"}:
+                    whole_fee_candidates.add(whole_fee)
                 finding = parse_page(kind, text, evidence)
                 if finding:
                     findings.append(finding)
+            band_finding, band_is_note = read_manual_note_band(image)
+            saw_manual_note_page |= band_is_note
+            if band_finding:
+                manual_findings.append(band_finding)
             fee_band_candidate = read_fee_band_candidate(
                 image,
                 page_number,
@@ -902,27 +973,48 @@ def predict(pdf_path: Path) -> dict[str, object]:
         recovered_fee = conflict_free_fee_fallback(fee_band_candidates)
         if recovered_fee:
             row["fee_status"] = recovered_fee
+        elif len(whole_fee_candidates) == 1:
+            row["fee_status"] = next(iter(whole_fee_candidates))
+    for field in CATEGORY_VOCABULARY:
+        candidates = category_candidates[field]
+        if field in {"species_code", "home_world"} and len(candidates) == 1:
+            row[field] = next(iter(candidates))
+        elif row[field] == DEFAULTS[field] and len(candidates) == 1:
+            row[field] = next(iter(candidates))
+        elif not candidates and field in {"species_code", "home_world"}:
+            fuzzy = fuzzy_visible_category_candidate(visible_ocr_texts, field)
+            if fuzzy:
+                row[field] = fuzzy
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])
     finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
     visible_clean_biometrics = any(
         item.source == "biometric" and item.value == "none"
         for item in evidence["risk_flags"]
-    ) and sum(item.source == "biometric" and item.value == "none" for item in evidence["risk_flags"]) >= 2
-    visible_paid_fee = any(
-        item.source == "fee" and item.value == "paid"
-        for item in evidence["fee_status"]
     )
+    visible_paid_fee = row["fee_status"] == "paid"
     explicit_manual_approval = (
         bool(manual_findings)
         and set(manual_findings) == {"APPROVED"}
     )
+    trusted_stale_arrival = False
+    if row["visa_class"] not in {"unknown", "DIP-1"} and row["arrival_date"] != "1900-01-01":
+        try:
+            stale = (PACKET_RECEIPT_DATE - date.fromisoformat(row["arrival_date"])).days > 180
+        except ValueError:
+            stale = False
+        trusted_stale_arrival = stale and any(
+            item.value == row["visa_class"] and item.source in {"intake", "sponsor"}
+            for item in evidence["visa_class"]
+        )
     adjudication, confidence = decide(
         row,
         finding,
         visible_clean_biometrics=visible_clean_biometrics,
         visible_paid_fee=visible_paid_fee,
         explicit_manual_approval=explicit_manual_approval,
+        trusted_stale_arrival=trusted_stale_arrival,
+        unresolved_manual_note=saw_manual_note_page and not manual_findings,
     )
     return {"case_id": pdf_path.stem, **row, "adjudication": adjudication, "confidence": confidence}
 

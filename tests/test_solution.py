@@ -66,6 +66,7 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(solution.clean_anchored_fee_status("MIB Fee Receipt\n$809.00"), "paid")
         self.assertEqual(solution.clean_anchored_fee_status("MIB Fee Receipt\n$0.00"), "")
         self.assertEqual(solution.clean_anchored_fee_status("Mandatory fee unpaid"), "")
+        self.assertEqual(solution.clean_anchored_fee_status("MIB Fee Receipt\nFee Status: waived"), "waived")
 
     def test_fee_band_reader_is_page_relative_and_conflict_fail_closed(self):
         image = Image.new("RGB", (100, 200), "white")
@@ -81,6 +82,20 @@ class VisiblePipelineTests(unittest.TestCase):
         conflict = replace(candidate, normalized_value="waived", page=4)
         self.assertEqual(solution.conflict_free_fee_fallback((candidate,)), "paid")
         self.assertEqual(solution.conflict_free_fee_fallback((candidate, conflict)), "")
+
+    def test_manual_note_band_reads_exact_labeled_finding(self):
+        image = Image.new("RGB", (100, 200), "white")
+        calls = []
+
+        def reader(crop, psm):
+            calls.append((crop.size, psm))
+            return "Manual Adjudicator Note\nFinding: APPROVED", 91.0
+
+        self.assertEqual(
+            solution.read_manual_note_band(image, read_variant=reader),
+            ("APPROVED", True),
+        )
+        self.assertEqual(calls, [((80, 60), 11)])
 
     def test_unpaid_fee_band_requires_a_separate_visible_reading(self):
         image = Image.new("RGB", (100, 200), "white")
@@ -127,7 +142,7 @@ class VisiblePipelineTests(unittest.TestCase):
             "",
         )
 
-    def test_manual_approval_requires_complete_nonadverse_corroboration(self):
+    def test_manual_approval_overrides_missing_lower_priority_fields(self):
         row = dict(solution.DEFAULTS)
         row.update({
             "visa_class": "XW-2",
@@ -146,6 +161,17 @@ class VisiblePipelineTests(unittest.TestCase):
             )[0],
             "APPROVED",
         )
+        incomplete = dict(solution.DEFAULTS)
+        self.assertEqual(
+            solution.decide(
+                incomplete,
+                "",
+                visible_clean_biometrics=False,
+                visible_paid_fee=False,
+                explicit_manual_approval=True,
+            )[0],
+            "APPROVED",
+        )
         row["risk_flags"] = "identity_conflict"
         self.assertEqual(
             solution.decide(
@@ -158,17 +184,43 @@ class VisiblePipelineTests(unittest.TestCase):
             "NEEDS_REVIEW",
         )
 
-    def test_clean_ocr_without_approval_authority_stays_in_review(self):
+    def test_clean_affirmative_evidence_approves_unless_authority_is_unresolved(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "none", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
         self.assertEqual(
             solution.decide(row, "", visible_clean_biometrics=True, visible_paid_fee=True)[0],
+            "APPROVED",
+        )
+        self.assertEqual(
+            solution.decide(
+                row,
+                "",
+                visible_clean_biometrics=True,
+                visible_paid_fee=True,
+                unresolved_manual_note=True,
+            )[0],
             "NEEDS_REVIEW",
         )
         row["fee_status"] = "unknown"
         self.assertEqual(
             solution.decide(row, "", visible_clean_biometrics=True, visible_paid_fee=False)[0],
             "NEEDS_REVIEW",
+        )
+
+    def test_staleness_and_strict_revocation_are_denial_facts(self):
+        row = dict(solution.DEFAULTS)
+        row.update({"visa_class": "XW-2", "fee_status": "paid", "arrival_date": "2025-08-01", "sponsor_id": "SPN-1111"})
+        self.assertEqual(
+            solution.decide(
+                row, "", visible_clean_biometrics=False, visible_paid_fee=True,
+                trusted_stale_arrival=True,
+            )[0],
+            "DENIED",
+        )
+        row.update({"arrival_date": "2026-04-01", "sponsor_id": "SPN-7331"})
+        self.assertEqual(
+            solution.decide(row, "", visible_clean_biometrics=False, visible_paid_fee=True)[0],
+            "DENIED",
         )
 
     def test_default_none_cannot_create_an_approval(self):
@@ -201,6 +253,44 @@ class VisiblePipelineTests(unittest.TestCase):
             solution.CATEGORY_VOCABULARY = {"home_world": ("Barnard-c", "Mars Dome-7")}
             self.assertEqual(solution.snap_category("home_world", "Barmard-c"), "Barnard-c")
             self.assertEqual(solution.snap_category("home_world", "zzzz"), "zzzz")
+        finally:
+            solution.CATEGORY_VOCABULARY = original
+
+    def test_visible_category_candidates_are_exact_and_context_bounded(self):
+        original = solution.CATEGORY_VOCABULARY
+        try:
+            solution.CATEGORY_VOCABULARY = {
+                "species_code": ("ORION_GRAYS",),
+                "declared_purpose": ("field repair",),
+            }
+            found = solution.visible_category_candidates(
+                "Species match ORION_GRAYS; expected for field repair",
+                "sponsor",
+            )
+            self.assertEqual(found["species_code"], {"ORION_GRAYS"})
+            self.assertEqual(found["declared_purpose"], {"field repair"})
+            self.assertNotIn(
+                "declared_purpose",
+                solution.visible_category_candidates("field repair", "registry"),
+            )
+        finally:
+            solution.CATEGORY_VOCABULARY = original
+
+    def test_fuzzy_visible_categories_require_a_unique_near_match(self):
+        original = solution.CATEGORY_VOCABULARY
+        try:
+            solution.CATEGORY_VOCABULARY = {
+                "home_world": ("Barnard-c", "Mars Dome-7"),
+                "declared_purpose": ("field repair",),
+            }
+            self.assertEqual(
+                solution.fuzzy_visible_category_candidate(("Home: Barmard c",), "home_world"),
+                "Barnard-c",
+            )
+            self.assertEqual(
+                solution.fuzzy_visible_category_candidate(("field repait",), "declared_purpose"),
+                "",
+            )
         finally:
             solution.CATEGORY_VOCABULARY = original
 
