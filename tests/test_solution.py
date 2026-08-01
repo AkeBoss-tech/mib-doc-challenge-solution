@@ -1,4 +1,5 @@
 import unittest
+from collections import defaultdict
 
 import solution
 
@@ -45,6 +46,17 @@ class VisiblePipelineTests(unittest.TestCase):
             solution.decide(row, "", visible_clean_biometrics=False, visible_paid_fee=True)[0],
             "NEEDS_REVIEW",
         )
+
+    def test_structured_labels_are_read_even_when_page_typing_is_wrong(self):
+        evidence = defaultdict(list)
+        solution.parse_page(
+            "other",
+            "Registry Name\nIxodane Luzarn\nHome World\nBarnard-c\nArrival Date\n2026-02-10",
+            evidence,
+        )
+        self.assertEqual(evidence["applicant_name"][0].value, "Ixodane Luzarn")
+        self.assertEqual(evidence["home_world"][0].value, "Barnard-c")
+        self.assertEqual(evidence["arrival_date"][0].value, "2026-02-10")
 
 
 if __name__ == "__main__":

@@ -183,31 +183,30 @@ def add(parsed: dict[str, list[Evidence]], field: str, value: str, source: str, 
 
 def parse_page(kind: str, text: str, parsed: dict[str, list[Evidence]]) -> str:
     weight = PRECEDENCE[kind]
-    if kind in {"intake", "other"}:
-        # The intake template places the name immediately before the printed
-        # ``Applicant`` label, while most other labels precede their value.
-        applicant = value_before_label(text, "Applicant(?: Name)?", clean_name)
-        if not applicant:
-            applicant = clean_name(extract_label(text, "Applicant(?: Name)?"))
-        add(parsed, "applicant_name", applicant, kind, weight)
-        add(parsed, "species_code", clean_species(extract_label(text, "Species(?: Code)?")), kind, weight)
-        add(parsed, "home_world", normalize_space(extract_label(text, "Home World")), kind, weight)
-        visa = re.search(r"\b(XW[- ]?[12]|DIP[- ]?1|MED[- ]?3|TRANSIT[- ]?7)\b", text, re.I)
-        add(parsed, "visa_class", visa.group(1).upper().replace(" ", "-") if visa else "", kind, weight)
-        sponsor = clean_sponsor(extract_label(text, "Sponsor(?: ID)?"))
-        if not sponsor:
-            sponsor = value_before_label(text, "Sponsor(?: ID)?", clean_sponsor)
-        add(parsed, "sponsor_id", sponsor, kind, weight)
-        add(parsed, "arrival_date", clean_date(extract_label(text, "Arrival(?: Date)?")), kind, weight)
-        add(parsed, "declared_purpose", normalize_space(extract_label(text, "(?:Declared )?Purpose")), kind, weight)
-    if kind == "fee":
-        status = re.search(r"\b(paid|unpaid|waived)\b", extract_label(text, "Fee Status") or text, re.I)
-        add(parsed, "fee_status", status.group(1).lower() if status else "", kind, weight)
-    if kind == "biometric":
-        add(parsed, "risk_flags", clean_flags(extract_label(text, "Observed Flags") or extract_label(text, "Risk Flags")), kind, weight)
-    if kind == "sponsor":
-        sponsor = clean_sponsor(extract_label(text, "Sponsor(?: ID)?")) or value_before_label(text, "Sponsor(?: ID)?", clean_sponsor) or clean_sponsor(text)
-        add(parsed, "sponsor_id", sponsor, kind, weight)
+    # Structured labels are stronger evidence than page-title recognition.  We
+    # therefore read label/value pairs on every visible page; page kind only
+    # sets provenance precedence when multiple pages disagree.
+    applicant = value_before_label(text, "Applicant(?: Name)?", clean_name)
+    if not applicant:
+        applicant = clean_name(extract_label(text, "Applicant(?: Name)?"))
+    if not applicant:
+        applicant = clean_name(extract_label(text, "Registry Name"))
+    add(parsed, "applicant_name", applicant, kind, weight)
+    add(parsed, "species_code", clean_species(extract_label(text, "Species(?: Code)?")), kind, weight)
+    add(parsed, "home_world", normalize_space(extract_label(text, "Home World")), kind, weight)
+    visa = re.search(r"\b(XW[- ]?[12]|DIP[- ]?1|MED[- ]?3|TRANSIT[- ]?7)\b", text, re.I)
+    add(parsed, "visa_class", visa.group(1).upper().replace(" ", "-") if visa else "", kind, weight)
+    sponsor = clean_sponsor(extract_label(text, "Sponsor(?: ID)?"))
+    if not sponsor:
+        sponsor = value_before_label(text, "Sponsor(?: ID)?", clean_sponsor)
+    if not sponsor:
+        sponsor = clean_sponsor(text) if kind == "sponsor" else ""
+    add(parsed, "sponsor_id", sponsor, kind, weight)
+    add(parsed, "arrival_date", clean_date(extract_label(text, "Arrival(?: Date)?")), kind, weight)
+    add(parsed, "declared_purpose", normalize_space(extract_label(text, "(?:Declared )?Purpose")), kind, weight)
+    status = re.search(r"\b(paid|unpaid|waived)\b", extract_label(text, "Fee Status"), re.I)
+    add(parsed, "fee_status", status.group(1).lower() if status else "", kind, weight)
+    add(parsed, "risk_flags", clean_flags(extract_label(text, "Observed Flags") or extract_label(text, "Risk Flags")), kind, weight)
     if kind == "note":
         add(parsed, "risk_flags", clean_flags(extract_label(text, "(?:Risk )?Flag") or text), kind, weight)
         finding = re.search(r"\b(APPROVED|DENIED|NEEDS[ _-]?REVIEW)\b", extract_label(text, "Finding") or text, re.I)
