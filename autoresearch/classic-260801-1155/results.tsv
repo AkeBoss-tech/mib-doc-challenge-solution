@@ -1,0 +1,5 @@
+iteration	candidate	development_delta	holdout_delta	full_delta	fee_changes	fee_correct	fee_regressions	decision_correct	decision_regressions	cfa	runtime_seconds	verdict
+0	incumbent	0	0	0	0	0	0	0	0	0	1091	baseline
+1	wide_top_band_shadow	0			4	4	0	0	0	0	9.29	discard_low_recall
+2	exact_anchor_fee_band	0.804741	1.759393	0.204461	69	49	19	1	0	0	965	discard_zero_amount_regressions
+3	strict_fee_band	0.730667	1.685319	0.292808	45	45	0	1	0	0	970	keep

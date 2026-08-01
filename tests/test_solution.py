@@ -60,6 +60,41 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(solution.clean_flags("SAMPLE DENIAL"), "")
         self.assertEqual(solution.clean_flags("ordinary administrative narrative"), "")
 
+    def test_fee_band_requires_visible_anchor_and_supports_bounded_recovery(self):
+        self.assertEqual(solution.clean_anchored_fee_status("Fee Status: paid"), "paid")
+        self.assertEqual(solution.clean_anchored_fee_status("Fee Status: waved"), "waived")
+        self.assertEqual(solution.clean_anchored_fee_status("MIB Fee Receipt\n$809.00"), "paid")
+        self.assertEqual(solution.clean_anchored_fee_status("MIB Fee Receipt\n$0.00"), "")
+        self.assertEqual(solution.clean_anchored_fee_status("Mandatory fee unpaid"), "")
+
+    def test_fee_band_reader_is_page_relative_and_conflict_fail_closed(self):
+        image = Image.new("RGB", (100, 200), "white")
+        candidate = solution.read_fee_band_candidate(
+            image,
+            3,
+            read_variant=lambda crop, psm: ("MIB Fee Receipt\nFee Status: paid", 92.0),
+        )
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.crop, (0, 0, 60, 50))
+        self.assertEqual(candidate.normalized_value, "paid")
+        self.assertEqual(candidate.page, 3)
+        conflict = replace(candidate, normalized_value="waived", page=4)
+        self.assertEqual(solution.conflict_free_fee_fallback((candidate,)), "paid")
+        self.assertEqual(solution.conflict_free_fee_fallback((candidate, conflict)), "")
+
+    def test_unpaid_fee_band_requires_a_separate_visible_reading(self):
+        image = Image.new("RGB", (100, 200), "white")
+        read = lambda crop, psm: ("MIB Fee Receipt\nFee Status: unpaid", 92.0)
+        uncorroborated = solution.read_fee_band_candidate(image, 1, read_variant=read)
+        corroborated = solution.read_fee_band_candidate(
+            image,
+            1,
+            corroborating_texts=("damaged form says unpaid",),
+            read_variant=read,
+        )
+        self.assertEqual(uncorroborated.normalized_value, "")
+        self.assertEqual(corroborated.normalized_value, "unpaid")
+
     def test_registry_embargo_status_is_review_evidence_not_denial_authority(self):
         evidence = defaultdict(list)
         solution.parse_page(

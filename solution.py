@@ -156,6 +156,10 @@ MAX_REGION_PROPOSALS_PER_FIELD = 2
 SPONSOR_ROI_MIN_OCR_QUALITY = 85.0
 RISK_FLAG_FUZZY_MIN_SIMILARITY = 0.75
 RISK_FLAG_FUZZY_MIN_MARGIN = 0.20
+FEE_BAND_WIDTH_RATIO = 0.60
+FEE_BAND_HEIGHT_RATIO = 0.25
+FEE_STATUS_FUZZY_MIN_SIMILARITY = 0.80
+FEE_STATUS_FUZZY_MIN_MARGIN = 0.20
 NON_NAME_LABELS = {
     normalized
     for labels in ANCHOR_LABELS.values()
@@ -356,6 +360,37 @@ def normalize_candidate(field: str, raw_text: str) -> str:
     return first
 
 
+def clean_anchored_fee_status(text: str) -> str:
+    """Read a fee value only when the same visible crop has an exact fee anchor."""
+    folded = normalized_anchor(text)
+    if "fee receipt" not in folded and "fee status" not in folded:
+        return ""
+    exact = re.search(r"\b(unpaid|paid|waived)\b", text, re.I)
+    if exact:
+        return exact.group(1).lower()
+    status_value = re.search(r"\bfee status\s*[:.=-]?\s*([a-z]{3,12})", text, re.I)
+    if status_value and status_value.group(1).casefold() != "unknown":
+        observed = status_value.group(1).casefold()
+        ranked = sorted(
+            (
+                (SequenceMatcher(None, observed, expected).ratio(), expected)
+                for expected in ("paid", "unpaid", "waived")
+            ),
+            reverse=True,
+        )
+        if (
+            ranked[0][0] >= FEE_STATUS_FUZZY_MIN_SIMILARITY
+            and ranked[0][0] - ranked[1][0] >= FEE_STATUS_FUZZY_MIN_MARGIN
+        ):
+            return ranked[0][1]
+    # A receipt that visibly records the standard paid amount is affirmative
+    # evidence even when its printed status is damaged. A zero charge is not
+    # treated as a waiver: it may instead mean the status itself is unknown.
+    if re.search(r"\$\s*809(?:\.00)?(?:\s|$)", text):
+        return "paid"
+    return ""
+
+
 def ocr_with_quality(image: Image.Image, psm: int) -> tuple[str, float]:
     words = ocr_words(image, psm=psm)
     lines: dict[tuple[int, int, int], list[OcrWord]] = defaultdict(list)
@@ -367,6 +402,47 @@ def ocr_with_quality(image: Image.Image, psm: int) -> tuple[str, float]:
     )
     quality = sum(word.confidence for word in words) / len(words) if words else 0.0
     return text, round(quality, 3)
+
+
+def read_fee_band_candidate(
+    image: Image.Image,
+    page: int,
+    *,
+    corroborating_texts: Iterable[str] = (),
+    read_variant: Callable[[Image.Image, int], tuple[str, float]] = ocr_with_quality,
+) -> CandidateValue | None:
+    """Read one measured, page-relative fee band from visible pixels."""
+    crop_box = (
+        0,
+        0,
+        int(image.width * FEE_BAND_WIDTH_RATIO),
+        int(image.height * FEE_BAND_HEIGHT_RATIO),
+    )
+    band = image.crop(crop_box)
+    band = ImageEnhance.Contrast(ImageOps.grayscale(band)).enhance(1.7)
+    raw_text, quality = read_variant(band, 11)
+    raw_text = raw_text.strip()
+    folded = normalized_anchor(raw_text)
+    if "fee receipt" not in folded and "fee status" not in folded:
+        return None
+    normalized_value = clean_anchored_fee_status(raw_text)
+    if normalized_value == "unpaid" and not any(
+        re.search(r"\bunpaid\b", text, re.I)
+        for text in corroborating_texts
+    ):
+        normalized_value = ""
+    return CandidateValue(
+        field="fee_status",
+        raw_text=raw_text,
+        normalized_value=normalized_value,
+        page=page,
+        crop=crop_box,
+        reader_family="top_left_fee_band",
+        transform_chain=("crop", "grayscale", "contrast_1.7"),
+        ocr_quality=quality,
+        anchor_quality=1.0,
+        visible_evidence_excerpt=normalize_space(raw_text)[:160],
+    )
 
 
 def read_roi_candidates(
@@ -463,6 +539,18 @@ def corroborated_sponsor_fallback(ledger: Iterable[LedgerEntry]) -> str:
     ]
     distinct_crops = {candidate.crop for candidate in supporting}
     return entry.selected_value if len(distinct_crops) >= 2 else ""
+
+
+def conflict_free_fee_fallback(candidates: Iterable[CandidateValue]) -> str:
+    """Promote the grouped-validated fee band only when all valid reads agree."""
+    values = {
+        candidate.normalized_value
+        for candidate in candidates
+        if candidate.reader_family == "top_left_fee_band"
+        and candidate.anchor_quality == 1.0
+        and candidate.normalized_value
+    }
+    return next(iter(values)) if len(values) == 1 else ""
 
 
 def write_trace(
@@ -719,6 +807,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
     trace_pages: list[dict[str, object]] = []
     trace_candidates: list[CandidateValue] = []
     sponsor_roi_candidates: list[CandidateValue] = []
+    fee_band_candidates: list[CandidateValue] = []
     trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
     try:
         for page_number, image in enumerate(render_pages(pdf_path), start=1):
@@ -728,6 +817,13 @@ def predict(pdf_path: Path) -> dict[str, object]:
                 finding = parse_page(kind, text, evidence)
                 if finding:
                     findings.append(finding)
+            fee_band_candidate = read_fee_band_candidate(
+                image,
+                page_number,
+                corroborating_texts=page_texts,
+            )
+            if fee_band_candidate is not None:
+                fee_band_candidates.append(fee_band_candidate)
             sponsor_page = any("sponsor" in text.casefold() for text in page_texts)
             if trace_enabled or sponsor_page:
                 words = ocr_words(ImageEnhance.Contrast(ImageOps.grayscale(image)).enhance(1.5))
@@ -759,6 +855,8 @@ def predict(pdf_path: Path) -> dict[str, object]:
                     if proposal.field_or_section != "sponsor_id"
                     for candidate in read_roi_candidates(image, proposal)
                 )
+                if fee_band_candidate is not None:
+                    page_candidates += (fee_band_candidate,)
                 trace_candidates.extend(page_candidates)
                 trace_pages.append({
                     "diagnostics": asdict(diagnostics),
@@ -776,6 +874,10 @@ def predict(pdf_path: Path) -> dict[str, object]:
         )
         if recovered_sponsor:
             row["sponsor_id"] = recovered_sponsor
+    if row["fee_status"] == DEFAULTS["fee_status"]:
+        recovered_fee = conflict_free_fee_fallback(fee_band_candidates)
+        if recovered_fee:
+            row["fee_status"] = recovered_fee
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])
     finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
