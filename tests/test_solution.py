@@ -1,6 +1,8 @@
 import unittest
 from collections import defaultdict
 
+from PIL import Image
+
 import solution
 
 
@@ -77,6 +79,37 @@ class VisiblePipelineTests(unittest.TestCase):
             self.assertEqual(solution.snap_category("home_world", "zzzz"), "zzzz")
         finally:
             solution.CATEGORY_VOCABULARY = original
+
+    def test_page_diagnostics_are_visible_pixel_and_deterministic(self):
+        image = Image.new("RGB", (20, 10), "white")
+        image.putpixel((3, 4), (0, 0, 0))
+        first = solution.page_diagnostics(image, 2)
+        second = solution.page_diagnostics(image, 2)
+        self.assertEqual(first, second)
+        self.assertEqual(first.page, 2)
+        self.assertEqual((first.width, first.height), (20, 10))
+        self.assertGreater(first.dark_pixel_fraction, 0)
+        self.assertEqual(first.orientation_correction_degrees, 0)
+
+    def test_region_proposal_uses_visible_label_not_a_field_value(self):
+        words = (
+            solution.OcrWord("Fee", 94, 10, 20, 20, 10, 1, 1, 1),
+            solution.OcrWord("Status", 95, 33, 20, 35, 10, 1, 1, 1),
+            solution.OcrWord("paid", 93, 76, 20, 25, 10, 1, 1, 1),
+        )
+        proposals = solution.propose_regions(
+            words, page=1, page_width=200, page_height=300, layout_family="fee",
+        )
+        proposal = next(item for item in proposals if item.field_or_section == "fee_status")
+        self.assertEqual(proposal.page, 1)
+        self.assertEqual(proposal.proposed_reader, "label_value_roi")
+        self.assertEqual(proposal.anchor_quality, 1.0)
+        self.assertNotIn("paid", proposal.field_or_section)
+        self.assertEqual(proposal.bounding_region[2:], (200, 80))
+
+    def test_anchor_matching_tolerates_small_ocr_error_but_not_unrelated_text(self):
+        self.assertGreaterEqual(solution.anchor_similarity("Fee Statu5", "fee status"), 0.84)
+        self.assertLess(solution.anchor_similarity("Narrative explanation", "fee status"), 0.84)
 
 
 if __name__ == "__main__":

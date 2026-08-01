@@ -17,14 +17,14 @@ import sys
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable
 
 import pypdfium2 as pdfium
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
 
 FIELDS = (
@@ -71,6 +71,62 @@ class Evidence:
     confidence: float
 
 
+@dataclass(frozen=True)
+class PageDiagnostics:
+    """Visible-pixel quality facts retained only for development tracing."""
+
+    page: int
+    width: int
+    height: int
+    grayscale_contrast: float
+    dark_pixel_fraction: float
+    edge_variance: float
+    orientation_correction_degrees: int
+
+
+@dataclass(frozen=True)
+class RegionProposal:
+    """A generic, visible-label proposal for a later ROI reader."""
+
+    field_or_section: str
+    page: int
+    bounding_region: tuple[int, int, int, int]
+    anchor_text: str
+    anchor_quality: float
+    layout_family: str
+    proposed_reader: str
+
+
+@dataclass(frozen=True)
+class OcrWord:
+    text: str
+    confidence: float
+    left: int
+    top: int
+    width: int
+    height: int
+    block: int
+    paragraph: int
+    line: int
+
+
+# These are public field-manual/schema labels, not case-specific clues.  The
+# proposals are deliberately separate from extraction so they can be measured
+# before a crop reader is allowed to influence output.
+ANCHOR_LABELS = {
+    "applicant_name": ("applicant name", "applicant", "registry name"),
+    "species_code": ("species code", "species"),
+    "home_world": ("home world",),
+    "visa_class": ("visa class",),
+    "sponsor_id": ("sponsor id", "sponsor"),
+    "arrival_date": ("arrival date",),
+    "declared_purpose": ("declared purpose", "purpose"),
+    "risk_flags": ("observed flags", "risk flags", "risk flag"),
+    "fee_status": ("fee status",),
+    "disposition": ("finding", "disposition", "decision"),
+}
+
+
 def normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
@@ -99,6 +155,130 @@ def ocr(image: Image.Image, psm: int) -> str:
     # Preserve OCR line boundaries: forms frequently place several fields on a
     # page, and collapsing them would let one label consume the next field.
     return completed.stdout
+
+
+def ocr_words(image: Image.Image) -> tuple[OcrWord, ...]:
+    """Read visible word geometry for development-only layout measurement."""
+    with tempfile.NamedTemporaryFile(suffix=".png") as temporary:
+        image.save(temporary.name)
+        completed = subprocess.run(
+            ["tesseract", temporary.name, "stdout", "--psm", "6", "-l", "eng", "tsv"],
+            capture_output=True, text=True, timeout=25, check=False,
+        )
+    if completed.returncode not in (0, 1):
+        return ()
+    words: list[OcrWord] = []
+    for row in csv.DictReader(completed.stdout.splitlines(), delimiter="\t"):
+        token = normalize_space(row.get("text", ""))
+        try:
+            confidence = float(row.get("conf", "-1"))
+            left, top = int(row["left"]), int(row["top"])
+            width, height = int(row["width"]), int(row["height"])
+            block, paragraph, line = int(row["block_num"]), int(row["par_num"]), int(row["line_num"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if token and confidence >= 0 and width > 0 and height > 0:
+            words.append(OcrWord(token, confidence, left, top, width, height, block, paragraph, line))
+    return tuple(words)
+
+
+def page_diagnostics(image: Image.Image, page: int) -> PageDiagnostics:
+    """Calculate deterministic, inexpensive pixel diagnostics without altering it."""
+    gray = ImageOps.grayscale(image)
+    statistics = ImageStat.Stat(gray)
+    contrast = statistics.stddev[0]
+    histogram = gray.histogram()
+    dark = sum(histogram[:96]) / max(1, image.width * image.height)
+    edges = gray.filter(ImageFilter.FIND_EDGES)
+    edge_variance = ImageStat.Stat(edges).var[0]
+    return PageDiagnostics(
+        page=page,
+        width=image.width,
+        height=image.height,
+        grayscale_contrast=round(contrast, 3),
+        dark_pixel_fraction=round(dark, 5),
+        edge_variance=round(edge_variance, 3),
+        # Rotation correction is intentionally not applied until a measured
+        # detector and its held-out benefit exist in this repository.
+        orientation_correction_degrees=0,
+    )
+
+
+def normalized_anchor(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def anchor_similarity(observed: str, expected: str) -> float:
+    """Bounded OCR-tolerant label matching, independent of field values."""
+    actual = normalized_anchor(observed)
+    target = normalized_anchor(expected)
+    if not actual or not target:
+        return 0.0
+    if target in actual:
+        return 1.0
+    return SequenceMatcher(None, actual, target).ratio()
+
+
+def propose_regions(
+    words: Iterable[OcrWord],
+    *,
+    page: int,
+    page_width: int,
+    page_height: int,
+    layout_family: str,
+) -> tuple[RegionProposal, ...]:
+    """Propose right/below value regions from visible field labels.
+
+    The region is intentionally a broad candidate, not a fixed template.  A
+    later reader may choose a horizontal or vertical value crop based on the
+    same proposal; neither route is allowed to decide policy directly.
+    """
+    lines: dict[tuple[int, int, int], list[OcrWord]] = defaultdict(list)
+    for word in words:
+        lines[(word.block, word.paragraph, word.line)].append(word)
+    proposals: list[RegionProposal] = []
+    for line_words in lines.values():
+        ordered = sorted(line_words, key=lambda word: word.left)
+        observed = " ".join(word.text for word in ordered)
+        for field, labels in ANCHOR_LABELS.items():
+            quality = max(anchor_similarity(observed, label) for label in labels)
+            # A small edit tolerance accommodates normal OCR substitutions,
+            # while excluding unrelated prose as an anchor.
+            if quality < 0.84:
+                continue
+            left = min(word.left for word in ordered)
+            top = min(word.top for word in ordered)
+            right = max(word.left + word.width for word in ordered)
+            bottom = max(word.top + word.height for word in ordered)
+            line_height = max(1, bottom - top)
+            proposals.append(RegionProposal(
+                field_or_section=field,
+                page=page,
+                bounding_region=(
+                    max(0, right - line_height),
+                    max(0, top - line_height),
+                    page_width,
+                    min(page_height, bottom + (line_height * 5)),
+                ),
+                anchor_text=observed,
+                anchor_quality=round(quality, 3),
+                layout_family=layout_family,
+                proposed_reader="label_value_roi",
+            ))
+    return tuple(proposals)
+
+
+def write_trace(pdf_path: Path, pages: list[dict[str, object]]) -> None:
+    """Persist optional visible-pixel development traces outside predictions."""
+    directory = os.environ.get("MIB_TRACE_DIR")
+    if not directory:
+        return
+    destination = Path(directory)
+    destination.mkdir(parents=True, exist_ok=True)
+    payload = {"case_id": pdf_path.stem, "pages": pages}
+    temporary = destination / f".{pdf_path.stem}.tmp"
+    temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(destination / f"{pdf_path.stem}.trace.json")
 
 
 def visible_texts(image: Image.Image) -> tuple[str, ...]:
@@ -293,15 +473,36 @@ def decide(
 def predict(pdf_path: Path) -> dict[str, object]:
     evidence: dict[str, list[Evidence]] = defaultdict(list)
     findings: list[str] = []
+    trace_pages: list[dict[str, object]] = []
+    trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
     try:
-        for image in render_pages(pdf_path):
+        for page_number, image in enumerate(render_pages(pdf_path), start=1):
             for text in visible_texts(image):
                 kind = page_kind(text)
                 finding = parse_page(kind, text, evidence)
                 if finding:
                     findings.append(finding)
+            if trace_enabled:
+                diagnostics = page_diagnostics(image, page_number)
+                words = ocr_words(ImageEnhance.Contrast(ImageOps.grayscale(image)).enhance(1.5))
+                # Use the ordinary whole-page OCR as the layout classifier;
+                # the TSV pass supplies only visible geometry for proposals.
+                layout = page_kind(" ".join(word.text for word in words))
+                proposals = propose_regions(
+                    words,
+                    page=page_number,
+                    page_width=image.width,
+                    page_height=image.height,
+                    layout_family=layout,
+                )
+                trace_pages.append({
+                    "diagnostics": asdict(diagnostics),
+                    "region_proposals": [asdict(proposal) for proposal in proposals],
+                })
     except (OSError, RuntimeError, subprocess.SubprocessError):
         pass
+    if trace_enabled:
+        write_trace(pdf_path, trace_pages)
     row = {field: choose(field, evidence[field]) for field in FIELDS}
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])

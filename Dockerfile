@@ -7,6 +7,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY solution.py .
+COPY models ./models
 COPY run.sh .
 RUN chmod 755 /app/run.sh
 ENTRYPOINT ["/app/run.sh"]

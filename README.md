@@ -8,6 +8,14 @@ The runtime reads only visible PDF pixels, performs local Tesseract OCR, keeps
 field evidence with page provenance, and fails closed to `NEEDS_REVIEW` unless
 the public field manual supports a decision.
 
+## Development traces
+
+Set `MIB_TRACE_DIR` during local development to write one JSON trace per PDF.
+Traces contain visible-pixel page diagnostics and generic label-anchored region
+proposals; they are not prediction inputs and are not part of a submission.
+This shadow mode is the measurement foundation for later, independently
+validated ROI readers.
+
 ## Run
 
 ```sh
