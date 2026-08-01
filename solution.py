@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -267,8 +269,10 @@ def main(input_dir: str, output_path: str) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8") as stream:
-        for pdf_path in paths:
-            stream.write(json.dumps(predict(pdf_path), separators=(",", ":")) + "\n")
+        workers = max(1, min(int(os.environ.get("MIB_WORKERS", "4")), 4))
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            for row in executor.map(predict, paths):
+                stream.write(json.dumps(row, separators=(",", ":")) + "\n")
     temporary.replace(destination)
 
 
