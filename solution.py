@@ -246,8 +246,12 @@ def decide(
         return "NEEDS_REVIEW", 0.45
     # A clean approval requires affirmative fee and biometric evidence rather
     # than using an extraction default as a proxy for no risk.
+    # Clean OCR is necessary but not yet sufficient for approval: public
+    # packets can contain all apparent core fields while an unrecovered manual
+    # condition still requires denial. Until an affirmative approval authority
+    # is read at high precision, keep clean packets in the review queue.
     if visible_clean_biometrics and visible_paid_fee:
-        return "APPROVED", 0.78
+        return "NEEDS_REVIEW", 0.40
     return "NEEDS_REVIEW", 0.42
 
 
