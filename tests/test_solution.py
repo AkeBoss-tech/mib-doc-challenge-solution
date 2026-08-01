@@ -20,14 +20,31 @@ class VisiblePipelineTests(unittest.TestCase):
     def test_disqualifying_flag_cannot_approve(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "active_warrant", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
-        self.assertEqual(solution.decide(row, "")[0], "DENIED")
+        self.assertEqual(
+            solution.decide(row, "", visible_clean_biometrics=True, visible_paid_fee=True)[0],
+            "DENIED",
+        )
 
     def test_approval_requires_observed_clean_fee_and_risk(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "none", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
-        self.assertEqual(solution.decide(row, "")[0], "APPROVED")
+        self.assertEqual(
+            solution.decide(row, "", visible_clean_biometrics=True, visible_paid_fee=True)[0],
+            "APPROVED",
+        )
         row["fee_status"] = "unknown"
-        self.assertEqual(solution.decide(row, "")[0], "NEEDS_REVIEW")
+        self.assertEqual(
+            solution.decide(row, "", visible_clean_biometrics=True, visible_paid_fee=False)[0],
+            "NEEDS_REVIEW",
+        )
+
+    def test_default_none_cannot_create_an_approval(self):
+        row = dict(solution.DEFAULTS)
+        row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "none", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
+        self.assertEqual(
+            solution.decide(row, "", visible_clean_biometrics=False, visible_paid_fee=True)[0],
+            "NEEDS_REVIEW",
+        )
 
 
 if __name__ == "__main__":

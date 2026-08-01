@@ -226,7 +226,13 @@ def choose(field: str, options: list[Evidence]) -> str:
     return best.value
 
 
-def decide(row: dict[str, str], finding: str) -> tuple[str, float]:
+def decide(
+    row: dict[str, str],
+    finding: str,
+    *,
+    visible_clean_biometrics: bool,
+    visible_paid_fee: bool,
+) -> tuple[str, float]:
     flags = set(row["risk_flags"].split("|")) if row["risk_flags"] != "none" else set()
     if finding == "DENIED" or flags & DISQUALIFYING or row["fee_status"] == "unpaid" or row["visa_class"] == "TRANSIT-7":
         return "DENIED", 0.91
@@ -240,7 +246,7 @@ def decide(row: dict[str, str], finding: str) -> tuple[str, float]:
         return "NEEDS_REVIEW", 0.45
     # A clean approval requires affirmative fee and biometric evidence rather
     # than using an extraction default as a proxy for no risk.
-    if row["risk_flags"] == "none" and row["fee_status"] == "paid":
+    if visible_clean_biometrics and visible_paid_fee:
         return "APPROVED", 0.78
     return "NEEDS_REVIEW", 0.42
 
@@ -259,7 +265,20 @@ def predict(pdf_path: Path) -> dict[str, object]:
         pass
     row = {field: choose(field, evidence[field]) for field in FIELDS}
     finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
-    adjudication, confidence = decide(row, finding)
+    visible_clean_biometrics = any(
+        item.source == "biometric" and item.value == "none"
+        for item in evidence["risk_flags"]
+    )
+    visible_paid_fee = any(
+        item.source == "fee" and item.value == "paid"
+        for item in evidence["fee_status"]
+    )
+    adjudication, confidence = decide(
+        row,
+        finding,
+        visible_clean_biometrics=visible_clean_biometrics,
+        visible_paid_fee=visible_paid_fee,
+    )
     return {"case_id": pdf_path.stem, **row, "adjudication": adjudication, "confidence": confidence}
 
 
