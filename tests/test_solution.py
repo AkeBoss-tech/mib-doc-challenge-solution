@@ -1,6 +1,7 @@
 import unittest
 from collections import defaultdict
 from dataclasses import replace
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -53,6 +54,18 @@ class VisiblePipelineTests(unittest.TestCase):
             "Ludane Qorvoss",
         )
         self.assertEqual(solution.clean_name("Species Code"), "")
+
+    def test_name_token_snap_requires_clear_similarity_and_margin(self):
+        with patch.object(
+            solution,
+            "NAME_TOKEN_VOCABULARY",
+            ("Ixomora", "Miravoss", "Qornax", "Qorzarn"),
+        ):
+            self.assertEqual(
+                solution.snap_applicant_name("Xomora Miravoss"),
+                "Ixomora Miravoss",
+            )
+            self.assertEqual(solution.snap_applicant_name("Qor Miravoss"), "Qor Miravoss")
 
     def test_disqualifying_flag_cannot_approve(self):
         row = dict(solution.DEFAULTS)
@@ -312,6 +325,16 @@ class VisiblePipelineTests(unittest.TestCase):
         finally:
             solution.CATEGORY_VOCABULARY = original
 
+    def test_output_only_purpose_and_visa_normalization(self):
+        with patch.dict(
+            solution.CATEGORY_VOCABULARY,
+            {"declared_purpose": ("field repair", "research", "transit")},
+        ):
+            self.assertEqual(solution.snap_output_purpose("flaid repair"), "field repair")
+            self.assertEqual(solution.snap_output_purpose("unrelated prose"), "unrelated prose")
+        self.assertEqual(solution.normalize_output_visa("XW2"), "XW-2")
+        self.assertEqual(solution.normalize_output_visa("MED-3"), "MED-3")
+
     def test_visible_category_candidates_are_exact_and_context_bounded(self):
         original = solution.CATEGORY_VOCABULARY
         try:
@@ -362,6 +385,47 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertGreaterEqual(first, 0.0)
         self.assertLessEqual(first, 1.0)
 
+    def test_visible_ocr_fee_model_masks_identifiers_and_normalizes_classes(self):
+        model = {
+            "classes": ["paid", "unknown"],
+            "intercepts": [0.0, 0.0],
+            "features": {"###": [1.0, [2.0, -2.0]]},
+        }
+        with patch.object(solution, "FEE_TEXT_MODEL", model):
+            first = solution.visible_ocr_fee_prediction(("123",))
+            second = solution.visible_ocr_fee_prediction(("987",))
+        self.assertEqual(first, second)
+        self.assertEqual(first[0], "paid")
+        self.assertGreater(first[1], 0.5)
+
+    def test_visible_ocr_categorical_model_is_field_agnostic(self):
+        model = {
+            "classes": ["research", "transit"],
+            "intercepts": [0.0, 0.0],
+            "features": {"res": [1.0, [2.0, -2.0]]},
+        }
+        first = solution.visible_ocr_categorical_prediction(("research",), model)
+        second = solution.visible_ocr_categorical_prediction(("research",), model)
+        self.assertEqual(first, second)
+        self.assertEqual(first[0], "research")
+        self.assertGreater(first[1], 0.5)
+
+    def test_visible_ocr_risk_model_emits_only_supported_flags(self):
+        model = {
+            "flags": ["active_warrant", "sponsor_mismatch"],
+            "intercepts": [-10.0, -10.0],
+            "thresholds": {"active_warrant": 0.65, "sponsor_mismatch": 0.65},
+            "features": {"ris": [1.0, [30.0, 0.0]]},
+        }
+        with patch.object(solution, "RISK_TEXT_MODEL", model):
+            self.assertEqual(solution.visible_ocr_risk_prediction(("risk",)), "active_warrant")
+            self.assertEqual(solution.visible_ocr_risk_prediction(("clear",)), "")
+
+    def test_modeled_risk_can_only_recover_denial_from_review(self):
+        self.assertTrue(solution.modeled_risk_denial_recovery("NEEDS_REVIEW", "active_warrant"))
+        self.assertFalse(solution.modeled_risk_denial_recovery("APPROVED", "active_warrant"))
+        self.assertFalse(solution.modeled_risk_denial_recovery("NEEDS_REVIEW", "identity_conflict"))
+
     def test_paired_approval_recovery_requires_complete_policy_and_denial_veto(self):
         row = {
             "applicant_name": "Veenax Ixoul", "species_code": "ARCTURIAN",
@@ -387,6 +451,27 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertTrue(solution.paired_approval_recovery(
             row, approval_probability=0.55, denial_probability=0.35,
             affirmative_clean_biometrics=True,
+        ))
+
+    def test_modeled_fee_approval_requires_all_independent_gates(self):
+        row = {
+            "applicant_name": "Veenax Ixoul", "species_code": "ARCTURIAN",
+            "home_world": "Luyten-b", "visa_class": "XW-2",
+            "sponsor_id": "SPN-1234", "arrival_date": "2026-07-01",
+            "declared_purpose": "research", "risk_flags": "none",
+            "fee_status": "unknown",
+        }
+        arguments = {
+            "fee_value": "paid", "fee_probability": 0.40, "fee_margin": 0.25,
+            "approval_probability": 0.75, "denial_probability": 0.30,
+            "affirmative_clean_biometrics": True,
+        }
+        self.assertTrue(solution.modeled_fee_approval_recovery(row, **arguments))
+        self.assertFalse(solution.modeled_fee_approval_recovery(
+            row, **dict(arguments, fee_margin=0.18),
+        ))
+        self.assertFalse(solution.modeled_fee_approval_recovery(
+            row, **dict(arguments, affirmative_clean_biometrics=False),
         ))
 
     def test_page_diagnostics_are_visible_pixel_and_deterministic(self):

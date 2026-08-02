@@ -17,3 +17,6 @@ iteration	lever	total	extraction	classification	calibration	cfa	status
 15	high_contrast_fee_band					0	reject_holdout_wrong_reads_and_negligible_safe_gain
 16	visible_thumbnail_router					0	reject_small_oof_gain_no_runtime_export
 17	manual_correction_date_risk_consensus	126.381740	41.450000	68.460000	16.471740	0	validated_full_docker
+18	frozen_cache_output_models	130.220528	44.745556	68.940000	16.534972	0	reject_proxy_mismatch_live_ocr
+19	live_docker_output_models	129.625957	44.218889	68.880000	16.527068	0	validated_full_docker
+20	strict_modeled_risk_denials_and_fee_gate	130.288017	44.218889	69.480000	16.589128	0	validated_10_case_differential_against_full_docker

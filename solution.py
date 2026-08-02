@@ -72,6 +72,22 @@ def load_category_vocabulary() -> dict[str, tuple[str, ...]]:
 CATEGORY_VOCABULARY = load_category_vocabulary()
 
 
+def load_name_token_vocabulary() -> tuple[str, ...]:
+    path = Path(__file__).with_name("models") / "public_name_tokens.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("schema") != "akeboss-public-name-token-vocabulary/v1":
+            return ()
+        return tuple(str(token) for token in payload["tokens"])
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return ()
+
+
+NAME_TOKEN_VOCABULARY = load_name_token_vocabulary()
+NAME_TOKEN_MIN_SIMILARITY = 0.60
+NAME_TOKEN_MIN_MARGIN = 0.05
+
+
 def load_text_model(filename: str, schema: str) -> dict[str, object]:
     path = Path(__file__).with_name("models") / filename
     try:
@@ -88,6 +104,18 @@ DENIAL_TEXT_MODEL = load_text_model(
 )
 APPROVAL_TEXT_MODEL = load_text_model(
     "visible_ocr_approval.json", "akeboss-visible-ocr-approval/v1"
+)
+FEE_TEXT_MODEL = load_text_model(
+    "visible_ocr_fee.json", "akeboss-visible-ocr-fee/v1"
+)
+PURPOSE_TEXT_MODEL = load_text_model(
+    "visible_ocr_declared_purpose.json", "akeboss-visible-ocr-declared-purpose/v1"
+)
+VISA_TEXT_MODEL = load_text_model(
+    "visible_ocr_visa_class.json", "akeboss-visible-ocr-visa-class/v1"
+)
+RISK_TEXT_MODEL = load_text_model(
+    "visible_ocr_risk_multilabel.json", "akeboss-visible-ocr-risk-multilabel/v1"
 )
 
 
@@ -206,6 +234,10 @@ PAIRED_APPROVAL_MIN_PROBABILITY = 0.75
 PAIRED_APPROVAL_MAX_DENIAL_PROBABILITY = 0.30
 BIOMETRIC_APPROVAL_MIN_PROBABILITY = 0.50
 BIOMETRIC_APPROVAL_MAX_DENIAL_PROBABILITY = 0.40
+MODELED_FEE_APPROVAL_MIN_PROBABILITY = 0.30
+MODELED_FEE_APPROVAL_MIN_MARGIN = 0.19
+MODELED_FEE_APPROVAL_MIN_ROUTER_PROBABILITY = 0.70
+MODELED_FEE_APPROVAL_MAX_DENIAL_PROBABILITY = 0.60
 
 
 def normalize_space(value: str) -> str:
@@ -249,6 +281,107 @@ def visible_ocr_denial_probability(texts: Iterable[str]) -> float:
 
 def visible_ocr_approval_probability(texts: Iterable[str]) -> float:
     return visible_ocr_model_probability(texts, APPROVAL_TEXT_MODEL)
+
+
+def visible_ocr_categorical_prediction(
+    texts: Iterable[str], model: dict[str, object]
+) -> tuple[str, float, float]:
+    """Predict one category from exported multiclass visible-OCR features."""
+    classes = model.get("classes", [])
+    intercepts = model.get("intercepts", [])
+    features = model.get("features", {})
+    if (
+        not isinstance(classes, list)
+        or not isinstance(intercepts, list)
+        or len(classes) < 2
+        or len(classes) != len(intercepts)
+        or not isinstance(features, dict)
+    ):
+        return "", 0.0, 0.0
+    text = re.sub(r"\s+", " ", re.sub(r"\d", "#", "\n".join(texts).casefold())).strip()
+    counts: Counter[str] = Counter()
+    for word in text.split():
+        padded = f" {word} "
+        for size in range(3, 6):
+            for offset in range(len(padded) - size + 1):
+                counts[padded[offset:offset + size]] += 1
+    weighted: list[tuple[float, list[float]]] = []
+    for token, count in counts.items():
+        parameters = features.get(token)
+        if (
+            isinstance(parameters, list)
+            and len(parameters) == 2
+            and isinstance(parameters[1], list)
+            and len(parameters[1]) == len(classes)
+        ):
+            weighted.append(((1.0 + math.log(count)) * float(parameters[0]), parameters[1]))
+    norm = math.sqrt(sum(value * value for value, _ in weighted)) or 1.0
+    sigmoid = []
+    for index, intercept in enumerate(intercepts):
+        score = float(intercept) + sum(
+            (value / norm) * float(coefficients[index])
+            for value, coefficients in weighted
+        )
+        sigmoid.append(1.0 / (1.0 + math.exp(-max(-40.0, min(40.0, score)))))
+    total = sum(sigmoid) or 1.0
+    probabilities = [value / total for value in sigmoid]
+    ranked = sorted(zip(probabilities, map(str, classes)), reverse=True)
+    return ranked[0][1], ranked[0][0], ranked[0][0] - ranked[1][0]
+
+
+def visible_ocr_fee_prediction(texts: Iterable[str]) -> tuple[str, float, float]:
+    return visible_ocr_categorical_prediction(texts, FEE_TEXT_MODEL)
+
+
+def visible_ocr_risk_prediction(texts: Iterable[str]) -> str:
+    """Return independently supported visible risk flags from an exported model."""
+    model = RISK_TEXT_MODEL
+    flags = model.get("flags", [])
+    intercepts = model.get("intercepts", [])
+    features = model.get("features", {})
+    if (
+        not isinstance(flags, list)
+        or not isinstance(intercepts, list)
+        or len(flags) != len(intercepts)
+        or not isinstance(features, dict)
+    ):
+        return ""
+    text = re.sub(r"\s+", " ", re.sub(r"\d", "#", "\n".join(texts).casefold())).strip()
+    counts: Counter[str] = Counter()
+    for word in text.split():
+        padded = f" {word} "
+        for size in range(3, 6):
+            for offset in range(len(padded) - size + 1):
+                counts[padded[offset:offset + size]] += 1
+    weighted: list[tuple[float, list[float]]] = []
+    for token, count in counts.items():
+        parameters = features.get(token)
+        if (
+            isinstance(parameters, list)
+            and len(parameters) == 2
+            and isinstance(parameters[1], list)
+            and len(parameters[1]) == len(flags)
+        ):
+            weighted.append(((1.0 + math.log(count)) * float(parameters[0]), parameters[1]))
+    norm = math.sqrt(sum(value * value for value, _ in weighted)) or 1.0
+    thresholds = model.get("thresholds", {})
+    found = []
+    for index, intercept in enumerate(intercepts):
+        score = float(intercept) + sum(
+            (value / norm) * float(coefficients[index])
+            for value, coefficients in weighted
+        )
+        probability = 1.0 / (1.0 + math.exp(-max(-40.0, min(40.0, score))))
+        threshold = float(thresholds.get(str(flags[index]), 1.0)) if isinstance(thresholds, dict) else 1.0
+        if probability >= threshold:
+            found.append(str(flags[index]))
+    return "|".join(sorted(found))
+
+
+def modeled_risk_denial_recovery(adjudication: str, modeled_risk: str) -> bool:
+    """Allow learned risk evidence to move only review toward denial."""
+    flags = set(modeled_risk.split("|")) if modeled_risk else set()
+    return adjudication == "NEEDS_REVIEW" and bool(flags & DISQUALIFYING)
 
 
 def render_pages(pdf_path: Path) -> Iterable[Image.Image]:
@@ -771,6 +904,39 @@ def clean_name(value: str) -> str:
     return " ".join(word[:1].upper() + word[1:].lower() for word in words[:4]) if len(words) >= 2 else ""
 
 
+def snap_applicant_name(value: str) -> str:
+    """Correct clear OCR edits using the exported public token vocabulary."""
+    words = value.split()
+    if len(words) != 2 or not NAME_TOKEN_VOCABULARY:
+        return value
+    vocabulary = set(NAME_TOKEN_VOCABULARY)
+    corrected: list[str] = []
+    for word in words:
+        if word in vocabulary:
+            corrected.append(word)
+            continue
+        if len(word) < 4:
+            corrected.append(word)
+            continue
+        ranked = sorted(
+            (
+                SequenceMatcher(None, word.casefold(), token.casefold()).ratio(),
+                token,
+            )
+            for token in NAME_TOKEN_VOCABULARY
+        )
+        best_score, best_token = ranked[-1]
+        runner_up = ranked[-2][0]
+        if (
+            best_score >= NAME_TOKEN_MIN_SIMILARITY
+            and best_score - runner_up >= NAME_TOKEN_MIN_MARGIN
+        ):
+            corrected.append(best_token)
+        else:
+            corrected.append(word)
+    return " ".join(corrected)
+
+
 def clean_enum(value: str, choices: set[str]) -> str:
     candidate = normalize_space(value).casefold().replace("_", " ")
     for choice in choices:
@@ -803,6 +969,29 @@ def snap_category(field: str, value: str) -> str:
     if best_score >= 0.86 and best_score - runner_up >= 0.06:
         return best_value
     return value
+
+
+def snap_output_purpose(value: str) -> str:
+    """Apply a lower-risk vocabulary snap after adjudication is complete."""
+    options = CATEGORY_VOCABULARY.get("declared_purpose", ())
+    if value in options or not value or not options:
+        return value
+    needle = category_key(value)
+    ranked = sorted(
+        (
+            SequenceMatcher(None, needle, category_key(option)).ratio(),
+            option,
+        )
+        for option in options
+    )
+    best_score, best_value = ranked[-1]
+    runner_up = ranked[-2][0]
+    return best_value if best_score >= 0.60 and best_score - runner_up >= 0.10 else value
+
+
+def normalize_output_visa(value: str) -> str:
+    match = re.fullmatch(r"(XW|DIP|MED|TRANSIT)-?([1237])", value)
+    return f"{match.group(1)}-{match.group(2)}" if match else value
 
 
 def visible_category_candidates(text: str, kind: str) -> dict[str, set[str]]:
@@ -1153,6 +1342,44 @@ def paired_approval_recovery(
     )
 
 
+def modeled_fee_approval_recovery(
+    row: dict[str, str],
+    *,
+    fee_value: str,
+    fee_probability: float,
+    fee_margin: float,
+    approval_probability: float,
+    denial_probability: float,
+    affirmative_clean_biometrics: bool,
+) -> bool:
+    """Recover approval only from a strict independent evidence conjunction."""
+    complete_non_fee = all(
+        row[field] != DEFAULTS[field]
+        for field in FIELDS
+        if field not in {"risk_flags", "fee_status"}
+    )
+    fee_ok = fee_value == "paid" or (
+        fee_value == "waived" and row["visa_class"] == "DIP-1"
+    )
+    sponsor_ok = row["visa_class"] == "DIP-1" or (
+        re.fullmatch(r"SPN-\d{4}", row["sponsor_id"]) is not None
+        and row["sponsor_id"] not in REVOKED_SPONSORS
+    )
+    return (
+        row["fee_status"] == "unknown"
+        and row["risk_flags"] == "none"
+        and complete_non_fee
+        and fee_ok
+        and sponsor_ok
+        and row["visa_class"] in {"XW-1", "XW-2", "DIP-1", "MED-3"}
+        and affirmative_clean_biometrics
+        and fee_probability >= MODELED_FEE_APPROVAL_MIN_PROBABILITY
+        and fee_margin >= MODELED_FEE_APPROVAL_MIN_MARGIN
+        and approval_probability >= MODELED_FEE_APPROVAL_MIN_ROUTER_PROBABILITY
+        and denial_probability <= MODELED_FEE_APPROVAL_MAX_DENIAL_PROBABILITY
+    )
+
+
 def decide(
     row: dict[str, str],
     finding: str,
@@ -1450,6 +1677,9 @@ def predict(pdf_path: Path) -> dict[str, object]:
     ):
         adjudication, confidence = "DENIED", 0.87
     approval_probability = visible_ocr_approval_probability(model_ocr_texts)
+    fee_model_value, fee_model_probability, fee_model_margin = visible_ocr_fee_prediction(
+        model_ocr_texts
+    )
     folded_model_text = normalized_anchor("\n".join(model_ocr_texts))
     affirmative_clean_biometrics = (
         "observed flags none" in folded_model_text
@@ -1472,8 +1702,52 @@ def predict(pdf_path: Path) -> dict[str, object]:
         )
     ):
         adjudication, confidence = "APPROVED", 0.94
+    elif (
+        adjudication == "NEEDS_REVIEW"
+        and not explicit_manual_review
+        and modeled_fee_approval_recovery(
+            row,
+            fee_value=fee_model_value,
+            fee_probability=fee_model_probability,
+            fee_margin=fee_model_margin,
+            approval_probability=approval_probability,
+            denial_probability=denial_probability,
+            affirmative_clean_biometrics=affirmative_clean_biometrics,
+        )
+    ):
+        adjudication, confidence = "APPROVED", 0.93
     if row["arrival_date"] == DEFAULTS["arrival_date"] and output_fallback_date:
         row["arrival_date"] = output_fallback_date
+    row["applicant_name"] = snap_applicant_name(row["applicant_name"])
+    row["declared_purpose"] = snap_output_purpose(row["declared_purpose"])
+    row["visa_class"] = normalize_output_visa(row["visa_class"])
+    for field, model in (
+        ("declared_purpose", PURPOSE_TEXT_MODEL),
+        ("visa_class", VISA_TEXT_MODEL),
+    ):
+        if row[field] == DEFAULTS[field]:
+            value, probability, margin = visible_ocr_categorical_prediction(
+                model_ocr_texts, model
+            )
+            if (
+                value
+                and probability >= float(model.get("minimum_probability", 1.0))
+                and margin >= float(model.get("minimum_margin", 1.0))
+            ):
+                row[field] = value
+    if row["risk_flags"] == DEFAULTS["risk_flags"]:
+        modeled_risk = visible_ocr_risk_prediction(model_ocr_texts)
+        if modeled_risk:
+            row["risk_flags"] = modeled_risk
+            if modeled_risk_denial_recovery(adjudication, modeled_risk):
+                adjudication, confidence = "DENIED", 0.87
+    if row["fee_status"] == DEFAULTS["fee_status"]:
+        if (
+            fee_model_value in {"paid", "unpaid", "waived"}
+            and fee_model_probability >= float(FEE_TEXT_MODEL.get("minimum_probability", 1.0))
+            and fee_model_margin >= float(FEE_TEXT_MODEL.get("minimum_margin", 1.0))
+        ):
+            row["fee_status"] = fee_model_value
     return {"case_id": pdf_path.stem, **row, "adjudication": adjudication, "confidence": confidence}
 
 
