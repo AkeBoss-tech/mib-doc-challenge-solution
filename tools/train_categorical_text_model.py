@@ -47,7 +47,11 @@ def exported_probabilities(text: str, features, intercepts) -> np.ndarray:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--field", choices=("declared_purpose", "visa_class"), required=True)
+    parser.add_argument(
+        "--field",
+        choices=("declared_purpose", "visa_class", "species_code", "home_world"),
+        required=True,
+    )
     parser.add_argument("--truth", type=Path, required=True)
     parser.add_argument("--ocr-cache", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -88,8 +92,8 @@ def main() -> None:
         "max_features": 16000,
         "logistic_c": 0.5,
         "classes": classifier.classes_.tolist(),
-        "minimum_probability": 0.15,
-        "minimum_margin": 0.02,
+        "minimum_probability": 0.08,
+        "minimum_margin": 0.0,
         "intercepts": list(intercepts),
         "features": {key: [idf, list(coefficients)] for key, (idf, coefficients) in features.items()},
     }

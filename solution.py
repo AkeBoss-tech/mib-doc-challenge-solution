@@ -85,7 +85,8 @@ def load_name_token_vocabulary() -> tuple[str, ...]:
 
 NAME_TOKEN_VOCABULARY = load_name_token_vocabulary()
 NAME_TOKEN_MIN_SIMILARITY = 0.60
-NAME_TOKEN_MIN_MARGIN = 0.05
+NAME_TOKEN_MIN_MARGIN = 0.00
+NAME_PAIR_MIN_SIMILARITY = 0.70
 
 
 def load_text_model(filename: str, schema: str) -> dict[str, object]:
@@ -113,6 +114,12 @@ PURPOSE_TEXT_MODEL = load_text_model(
 )
 VISA_TEXT_MODEL = load_text_model(
     "visible_ocr_visa_class.json", "akeboss-visible-ocr-visa-class/v1"
+)
+SPECIES_TEXT_MODEL = load_text_model(
+    "visible_ocr_species_code.json", "akeboss-visible-ocr-species-code/v1"
+)
+HOME_WORLD_TEXT_MODEL = load_text_model(
+    "visible_ocr_home_world.json", "akeboss-visible-ocr-home-world/v1"
 )
 RISK_TEXT_MODEL = load_text_model(
     "visible_ocr_risk_multilabel.json", "akeboss-visible-ocr-risk-multilabel/v1"
@@ -907,9 +914,38 @@ def clean_name(value: str) -> str:
 def snap_applicant_name(value: str) -> str:
     """Correct clear OCR edits using the exported public token vocabulary."""
     words = value.split()
-    if len(words) != 2 or not NAME_TOKEN_VOCABULARY:
+    if len(words) not in {2, 3, 4} or not NAME_TOKEN_VOCABULARY:
         return value
     vocabulary = set(NAME_TOKEN_VOCABULARY)
+
+    def ranked_token(word: str) -> tuple[float, float, str]:
+        ranked = sorted(
+            (
+                SequenceMatcher(None, word.casefold(), token.casefold()).ratio(),
+                token,
+            )
+            for token in NAME_TOKEN_VOCABULARY
+        )
+        return ranked[-1][0], ranked[-1][0] - ranked[-2][0], ranked[-1][1]
+
+    if len(words) > 2:
+        pairs = []
+        for first_index in range(len(words) - 1):
+            for second_index in range(first_index + 1, len(words)):
+                first = ranked_token(words[first_index])
+                second = ranked_token(words[second_index])
+                if min(first[0], second[0]) >= NAME_PAIR_MIN_SIMILARITY:
+                    pairs.append((
+                        min(first[0], second[0]),
+                        first[0] + second[0],
+                        first[2],
+                        second[2],
+                    ))
+        if pairs:
+            _, _, first, second = max(pairs)
+            return f"{first} {second}"
+        return value
+
     corrected: list[str] = []
     for word in words:
         if word in vocabulary:
@@ -918,18 +954,10 @@ def snap_applicant_name(value: str) -> str:
         if len(word) < 4:
             corrected.append(word)
             continue
-        ranked = sorted(
-            (
-                SequenceMatcher(None, word.casefold(), token.casefold()).ratio(),
-                token,
-            )
-            for token in NAME_TOKEN_VOCABULARY
-        )
-        best_score, best_token = ranked[-1]
-        runner_up = ranked[-2][0]
+        best_score, margin, best_token = ranked_token(word)
         if (
             best_score >= NAME_TOKEN_MIN_SIMILARITY
-            and best_score - runner_up >= NAME_TOKEN_MIN_MARGIN
+            and margin >= NAME_TOKEN_MIN_MARGIN
         ):
             corrected.append(best_token)
         else:
@@ -1051,6 +1079,28 @@ def unique_visible_arrival_date(texts: Iterable[str]) -> str:
                 continue
             if PACKET_RECEIPT_DATE.year - 1 <= parsed.year <= PACKET_RECEIPT_DATE.year:
                 candidates.add(raw)
+    return next(iter(candidates)) if len(candidates) == 1 else ""
+
+
+def fuzzy_visible_arrival_date(texts: Iterable[str]) -> str:
+    """Recover one anchored date after a consistent visible 6-to-8 OCR edit."""
+    candidates: set[str] = set()
+    for text in texts:
+        for line in text.splitlines():
+            # The broad label shape admits ordinary OCR damage to "Arrival
+            # Date" but still requires a short, same-line field label.
+            if not re.search(r"\ba[a-z]{2,12}\s+d[a-z]{2,6}\b", line, re.I):
+                continue
+            for month, day in re.findall(r"\b2028[-/](\d{2})[-/]?(\d{2})\b", line):
+                # On this print family the glyph used for six is frequently
+                # read as eight in both the year and month positions.
+                month = "06" if month == "08" else month
+                rendered = f"2026-{month}-{day}"
+                try:
+                    date.fromisoformat(rendered)
+                except ValueError:
+                    continue
+                candidates.add(rendered)
     return next(iter(candidates)) if len(candidates) == 1 else ""
 
 
@@ -1718,14 +1768,20 @@ def predict(pdf_path: Path) -> dict[str, object]:
         adjudication, confidence = "APPROVED", 0.93
     if row["arrival_date"] == DEFAULTS["arrival_date"] and output_fallback_date:
         row["arrival_date"] = output_fallback_date
+    if row["arrival_date"] == DEFAULTS["arrival_date"]:
+        fuzzy_date = fuzzy_visible_arrival_date(model_ocr_texts)
+        if fuzzy_date:
+            row["arrival_date"] = fuzzy_date
     row["applicant_name"] = snap_applicant_name(row["applicant_name"])
     row["declared_purpose"] = snap_output_purpose(row["declared_purpose"])
     row["visa_class"] = normalize_output_visa(row["visa_class"])
-    for field, model in (
-        ("declared_purpose", PURPOSE_TEXT_MODEL),
-        ("visa_class", VISA_TEXT_MODEL),
+    for field, model, valid_values in (
+        ("declared_purpose", PURPOSE_TEXT_MODEL, CATEGORY_VOCABULARY.get("declared_purpose", ())),
+        ("visa_class", VISA_TEXT_MODEL, ("XW-1", "XW-2", "DIP-1", "MED-3", "TRANSIT-7")),
+        ("species_code", SPECIES_TEXT_MODEL, CATEGORY_VOCABULARY.get("species_code", ())),
+        ("home_world", HOME_WORLD_TEXT_MODEL, CATEGORY_VOCABULARY.get("home_world", ())),
     ):
-        if row[field] == DEFAULTS[field]:
+        if row[field] not in valid_values:
             value, probability, margin = visible_ocr_categorical_prediction(
                 model_ocr_texts, model
             )

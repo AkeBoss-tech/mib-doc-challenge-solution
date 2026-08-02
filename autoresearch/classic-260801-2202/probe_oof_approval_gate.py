@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -23,6 +24,11 @@ FIELDS = ("applicant_name", "species_code", "home_world", "visa_class", "sponsor
 
 def sanitize(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"\d", "#", text.casefold())).strip()
+
+
+def group(case_id: str) -> str:
+    value = int(hashlib.sha256(case_id.encode()).hexdigest()[:8], 16) % 2
+    return "development" if value == 0 else "holdout"
 
 
 def main() -> None:
@@ -81,10 +87,20 @@ def main() -> None:
                 for denial_max in (0.20, 0.30, 0.40, 0.49):
                     routed = policy_ok & (approval >= approval_min) & (denial <= denial_max)
                     counts = {value: int(np.sum(routed & (actual == value))) for value in ("APPROVED", "NEEDS_REVIEW", "DENIED")}
+                    groups = {}
+                    for group_name in ("development", "holdout"):
+                        group_mask = np.asarray([group(case_id) == group_name for case_id in ids])
+                        selected = routed & group_mask
+                        group_counts = {value: int(np.sum(selected & (actual == value))) for value in ("APPROVED", "NEEDS_REVIEW", "DENIED")}
+                        groups[group_name] = {
+                            "counts": group_counts,
+                            "classification_raw_gain": 6 * group_counts["APPROVED"] - 7 * group_counts["NEEDS_REVIEW"],
+                        }
                     candidates.append({"minimum_complete": minimum_complete, "require_bio_none": require_bio_none,
                                        "approval_min": approval_min, "denial_max": denial_max,
                                        "routed": int(np.sum(routed)), "counts": counts,
-                                       "classification_raw_gain": 6 * counts["APPROVED"] - 7 * counts["NEEDS_REVIEW"]})
+                                       "classification_raw_gain": 6 * counts["APPROVED"] - 7 * counts["NEEDS_REVIEW"],
+                                       "groups": groups})
     candidates.sort(key=lambda row: (row["counts"]["DENIED"] == 0, row["classification_raw_gain"], row["counts"]["APPROVED"]), reverse=True)
     for candidate in candidates[:25]:
         print(json.dumps(candidate, separators=(",", ":")))

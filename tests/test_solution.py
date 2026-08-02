@@ -67,6 +67,21 @@ class VisiblePipelineTests(unittest.TestCase):
             )
             self.assertEqual(solution.snap_applicant_name("Qor Miravoss"), "Qor Miravoss")
 
+    def test_name_token_snap_removes_one_high_confidence_ocr_artifact(self):
+        with patch.object(
+            solution,
+            "NAME_TOKEN_VOCABULARY",
+            ("Ixomora", "Miravoss", "Qornax", "Qorzarn"),
+        ):
+            self.assertEqual(
+                solution.snap_applicant_name("COPY Ixomora Miravoss"),
+                "Ixomora Miravoss",
+            )
+            self.assertEqual(
+                solution.snap_applicant_name("unrelated damaged prose"),
+                "unrelated damaged prose",
+            )
+
     def test_disqualifying_flag_cannot_approve(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "active_warrant", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
@@ -674,6 +689,20 @@ class VisiblePipelineTests(unittest.TestCase):
             "",
         )
         self.assertEqual(solution.unique_visible_arrival_date(("decoy 2028-03-23",)), "")
+
+    def test_fuzzy_arrival_date_requires_anchor_and_unique_ocr_repair(self):
+        self.assertEqual(
+            solution.fuzzy_visible_arrival_date(("Antval Date: 2028-08-12",)),
+            "2026-06-12",
+        )
+        self.assertEqual(solution.fuzzy_visible_arrival_date(("decoy 2028-08-12",)), "")
+        self.assertEqual(
+            solution.fuzzy_visible_arrival_date((
+                "Antval Date: 2028-08-12",
+                "Arrival Date: 2028-05-09",
+            )),
+            "",
+        )
 
     def test_packet_adverse_flags_exclude_instruction_payloads(self):
         self.assertEqual(

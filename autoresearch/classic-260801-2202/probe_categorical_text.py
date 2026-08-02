@@ -78,8 +78,8 @@ def main() -> None:
             "invalid": ~np.isin(current, classes),
             "all": np.ones(len(ids), dtype=bool),
         }[scope]
-        for probability in (0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60):
-            for margin_threshold in (0.02, 0.05, 0.10, 0.15, 0.20):
+        for probability in (0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60):
+            for margin_threshold in (0.00, 0.01, 0.02, 0.05, 0.10, 0.15, 0.20):
                 changed = eligible & (proposed != current) & (maximum >= probability) & (margin >= margin_threshold)
                 result = {
                     "field": args.field, "scope": scope, "probability": probability,
@@ -102,8 +102,10 @@ def main() -> None:
         min(row["groups"]["development"]["net"], row["groups"]["holdout"]["net"]),
         row["net"], -row["losses"],
     ), reverse=True)
-    for row in results[:12]:
-        print(json.dumps(row, separators=(",", ":")))
+    for scope in ("default", "invalid", "all"):
+        scoped = [row for row in results if row["scope"] == scope]
+        for row in scoped[:8]:
+            print(json.dumps(row, separators=(",", ":")))
 
 
 if __name__ == "__main__":
