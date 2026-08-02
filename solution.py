@@ -1109,6 +1109,53 @@ def clean_sponsor(value: str) -> str:
     return f"SPN-{found.group(1)}" if found else ""
 
 
+def visible_sponsor_output_fallback(texts: Iterable[str]) -> str:
+    """Choose one packet-wide visible sponsor candidate for output recovery."""
+    substitutions = str.maketrans({
+        "O": "0", "I": "1", "L": "1", "S": "5", "B": "8", "Z": "2",
+    })
+    counts: Counter[str] = Counter()
+    for text in texts:
+        for raw in re.findall(r"\bSPN[- ]?([0-9OILSBZ]{4})\b", text.upper()):
+            candidate = f"SPN-{raw.translate(substitutions)}"
+            if candidate != DEFAULTS["sponsor_id"]:
+                counts[candidate] += 1
+    ranked = counts.most_common()
+    if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
+        return ""
+    return ranked[0][0]
+
+
+def visible_name_output_fallback(texts: Iterable[str]) -> str:
+    """Recover one unambiguous packet-wide name pair from visible OCR tokens."""
+    if not NAME_TOKEN_VOCABULARY:
+        return ""
+
+    def nearest(word: str) -> tuple[float, str]:
+        ranked = max(
+            (
+                SequenceMatcher(None, word.casefold(), token.casefold()).ratio(),
+                token,
+            )
+            for token in NAME_TOKEN_VOCABULARY
+        )
+        return ranked
+
+    evidence: Counter[str] = Counter()
+    for text in texts:
+        for line in text.splitlines():
+            words = re.findall(r"[A-Za-z][A-Za-z'-]*", line)
+            for first, second in zip(words, words[1:]):
+                first_score, first_token = nearest(first)
+                second_score, second_token = nearest(second)
+                if min(first_score, second_score) >= NAME_PAIR_MIN_SIMILARITY:
+                    evidence[f"{first_token} {second_token}"] += 1
+    ranked = evidence.most_common()
+    if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
+        return ""
+    return ranked[0][0]
+
+
 def clean_flags(value: str) -> str:
     folded = value.casefold().replace("-", "_").replace(" ", "_")
     found = [flag for flag in sorted(DISQUALIFYING | REVIEW_FLAGS) if flag in folded]
@@ -1772,6 +1819,14 @@ def predict(pdf_path: Path) -> dict[str, object]:
         fuzzy_date = fuzzy_visible_arrival_date(model_ocr_texts)
         if fuzzy_date:
             row["arrival_date"] = fuzzy_date
+    if row["sponsor_id"] == DEFAULTS["sponsor_id"]:
+        output_sponsor = visible_sponsor_output_fallback(model_ocr_texts)
+        if output_sponsor:
+            row["sponsor_id"] = output_sponsor
+    if row["applicant_name"] == DEFAULTS["applicant_name"]:
+        output_name = visible_name_output_fallback(model_ocr_texts)
+        if output_name:
+            row["applicant_name"] = output_name
     row["applicant_name"] = snap_applicant_name(row["applicant_name"])
     row["declared_purpose"] = snap_output_purpose(row["declared_purpose"])
     row["visa_class"] = normalize_output_visa(row["visa_class"])

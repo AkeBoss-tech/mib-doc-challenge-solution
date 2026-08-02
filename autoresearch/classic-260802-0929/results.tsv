@@ -1,0 +1,6 @@
+iteration	lever	development_gain	holdout_gain	full_score	cfa	verdict
+0	validated_incumbent	0	0	131.300239	0	keep
+1	date_component_classifier	0 exact	0 exact	131.300239	0	discard
+2	sponsor_sentinel_recovery	4 exact	11 exact	131.383572	0	keep
+3	strict_name_pair_recovery	4 exact	2 exact	131.416906	0	keep
+4	relaxed_name_pair_recovery	1 exact	0 exact	131.389128	0	discard

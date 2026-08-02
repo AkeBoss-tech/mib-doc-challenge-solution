@@ -82,6 +82,45 @@ class VisiblePipelineTests(unittest.TestCase):
                 "unrelated damaged prose",
             )
 
+    def test_sponsor_output_fallback_uses_visible_packet_consensus(self):
+        self.assertEqual(
+            solution.visible_sponsor_output_fallback(
+                ("Sponsor ID: SPN-OI2B\nSponsor ID: SPN-OI2B",)
+            ),
+            "SPN-0128",
+        )
+        self.assertEqual(
+            solution.visible_sponsor_output_fallback(("SPN-1234 SPN-5678",)),
+            "",
+        )
+        self.assertEqual(
+            solution.visible_sponsor_output_fallback(("SPN-0000",)),
+            "",
+        )
+
+    def test_name_output_fallback_requires_one_unambiguous_visible_pair(self):
+        with patch.object(
+            solution,
+            "NAME_TOKEN_VOCABULARY",
+            ("Ixomora", "Miravoss", "Qornax", "Qorzarn"),
+        ):
+            self.assertEqual(
+                solution.visible_name_output_fallback(
+                    ("Ixornora Miravoss\nIxornora Miravoss",)
+                ),
+                "Ixomora Miravoss",
+            )
+            self.assertEqual(
+                solution.visible_name_output_fallback(("Qornax Qorzarn",)),
+                "Qornax Qorzarn",
+            )
+            self.assertEqual(
+                solution.visible_name_output_fallback(
+                    ("Ixomora Miravoss\nQornax Qorzarn",)
+                ),
+                "",
+            )
+
     def test_disqualifying_flag_cannot_approve(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "active_warrant", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
