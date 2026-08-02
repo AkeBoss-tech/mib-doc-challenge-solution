@@ -15,3 +15,5 @@ iteration	lever	total	extraction	classification	calibration	cfa	status
 13	validated_124_stack	124.514335	40.451111	67.850000	16.213224	0	validated_full_docker
 14	applicant_bound_attestation_manual_authority	125.593785	40.943333	68.270000	16.380452	0	validated_full_docker
 15	high_contrast_fee_band					0	reject_holdout_wrong_reads_and_negligible_safe_gain
+16	visible_thumbnail_router					0	reject_small_oof_gain_no_runtime_export
+17	manual_correction_date_risk_consensus	126.381740	41.450000	68.460000	16.471740	0	validated_full_docker

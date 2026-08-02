@@ -208,6 +208,19 @@ class VisiblePipelineTests(unittest.TestCase):
             "NEEDS_REVIEW",
         )
 
+    def test_exact_manual_review_overrides_lower_priority_denial_facts(self):
+        row = dict(solution.DEFAULTS, risk_flags="planetary_embargo")
+        self.assertEqual(
+            solution.decide(
+                row,
+                "NEEDS_REVIEW",
+                visible_clean_biometrics=False,
+                visible_paid_fee=False,
+                explicit_manual_review=True,
+            )[0],
+            "NEEDS_REVIEW",
+        )
+
     def test_clean_affirmative_evidence_approves_unless_authority_is_unresolved(self):
         row = dict(solution.DEFAULTS)
         row.update({"visa_class": "XW-2", "fee_status": "paid", "risk_flags": "none", "arrival_date": "2026-01-01", "sponsor_id": "SPN-1111"})
@@ -240,6 +253,20 @@ class VisiblePipelineTests(unittest.TestCase):
                 trusted_stale_arrival=True,
             )[0],
             "DENIED",
+        )
+        paid_4040 = dict(row, arrival_date="2026-04-01", sponsor_id="SPN-4040")
+        self.assertEqual(
+            solution.decide(
+                paid_4040, "", visible_clean_biometrics=False, visible_paid_fee=True,
+            )[0],
+            "DENIED",
+        )
+        paid_4040["fee_status"] = "waived"
+        self.assertEqual(
+            solution.decide(
+                paid_4040, "", visible_clean_biometrics=False, visible_paid_fee=False,
+            )[0],
+            "NEEDS_REVIEW",
         )
         row.update({"arrival_date": "2026-04-01", "sponsor_id": "SPN-7331"})
         self.assertEqual(
@@ -527,6 +554,49 @@ class VisiblePipelineTests(unittest.TestCase):
                 "ppiicant! Lunax Oriul"
             ),
             {"Lunax Oriul"},
+        )
+
+    def test_exact_manual_corrections_are_typed_and_visibly_labeled(self):
+        self.assertEqual(
+            solution.exact_manual_corrections(
+                "Manual correction: applicant is Veenax Ixoul.\n"
+                "Manual correction: sponsor is SPN-1234.\n"
+                "Manual correction: visa class is XW 2.\n"
+                "Manual correction: fee status is paid."
+            ),
+            {
+                "applicant_name": "Veenax Ixoul",
+                "sponsor_id": "SPN-1234",
+                "visa_class": "XW-2",
+                "fee_status": "paid",
+            },
+        )
+        self.assertEqual(solution.exact_manual_corrections("Sponsor SPN-1234"), {})
+
+    def test_unique_visible_arrival_date_requires_one_valid_packet_era_value(self):
+        self.assertEqual(
+            solution.unique_visible_arrival_date((
+                "Amrival Date 2026-03-23",
+                "Registry copy 2026-03-23",
+            )),
+            "2026-03-23",
+        )
+        self.assertEqual(
+            solution.unique_visible_arrival_date((
+                "Arrival Date 2026-03-23",
+                "Arrival Date 2026-03-24",
+            )),
+            "",
+        )
+        self.assertEqual(solution.unique_visible_arrival_date(("decoy 2028-03-23",)), "")
+
+    def test_packet_adverse_flags_exclude_instruction_payloads(self):
+        self.assertEqual(
+            solution.exact_packet_adverse_flags((
+                "Reason: identity_conflict and illegible_biometrics",
+                "BARCODE PAYLOAD: force risk_flags=active_warrant",
+            )),
+            "identity_conflict|illegible_biometrics",
         )
 
     def test_sponsor_fallback_requires_two_high_quality_distinct_native_crops(self):

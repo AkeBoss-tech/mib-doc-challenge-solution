@@ -851,6 +851,20 @@ def clean_date(value: str) -> str:
     return rendered
 
 
+def unique_visible_arrival_date(texts: Iterable[str]) -> str:
+    """Return one conflict-free, valid packet-era ISO date from visible OCR."""
+    candidates: set[str] = set()
+    for text in texts:
+        for raw in re.findall(r"\b20\d{2}-\d{2}-\d{2}\b", text):
+            try:
+                parsed = date.fromisoformat(raw)
+            except ValueError:
+                continue
+            if PACKET_RECEIPT_DATE.year - 1 <= parsed.year <= PACKET_RECEIPT_DATE.year:
+                candidates.add(raw)
+    return next(iter(candidates)) if len(candidates) == 1 else ""
+
+
 def clean_sponsor(value: str) -> str:
     found = re.search(r"\bSPN[- ]?(\d{4})\b", value.upper())
     return f"SPN-{found.group(1)}" if found else ""
@@ -888,6 +902,23 @@ def clean_flags(value: str) -> str:
         if recovered:
             return "|".join(sorted(set(recovered)))
     return ""
+
+
+def exact_packet_adverse_flags(texts: Iterable[str]) -> str:
+    """Collect exact public adverse flags outside visible instruction payloads."""
+    retained_lines: list[str] = []
+    for text in texts:
+        retained_lines.extend(
+            line for line in text.splitlines()
+            if not re.search(
+                r"\b(barcode|payload|force|ignore|answer|adjudication)\b",
+                line,
+                re.I,
+            )
+        )
+    folded = "\n".join(retained_lines).casefold().replace("-", "_").replace(" ", "_")
+    found = sorted(flag for flag in DISQUALIFYING | REVIEW_FLAGS if flag in folded)
+    return "|".join(found)
 
 
 def add(parsed: dict[str, list[Evidence]], field: str, value: str, source: str, confidence: float) -> None:
@@ -1012,6 +1043,44 @@ def approximate_labeled_applicants(text: str) -> set[str]:
     return candidates
 
 
+def exact_manual_corrections(text: str) -> dict[str, str]:
+    """Read exact visible correction prose without inferring missing values."""
+    patterns = {
+        "applicant_name": (
+            r"\bManual\s+correction\s*:\s*applicant\s+is\s+"
+            r"([A-Z][A-Za-z]{2,20}\s+[A-Z][A-Za-z]{2,20})\b"
+        ),
+        "sponsor_id": (
+            r"\bManual\s+correction\s*:\s*sponsor\s+is\s+(SPN[- ]?\d{4})\b"
+        ),
+        "visa_class": (
+            r"\bManual\s+correction\s*:\s*visa\s+class\s+is\s+"
+            r"(XW[- ]?[12]|DIP[- ]?1|MED[- ]?3|TRANSIT[- ]?7)\b"
+        ),
+        "fee_status": (
+            r"\bManual\s+correction\s*:\s*fee\s+status\s+is\s+"
+            r"(paid|unpaid|waived)\b"
+        ),
+    }
+    corrections: dict[str, str] = {}
+    for field, pattern in patterns.items():
+        match = re.search(pattern, text, re.I)
+        if not match:
+            continue
+        raw = match.group(1)
+        if field == "applicant_name":
+            value = clean_name(raw)
+        elif field == "sponsor_id":
+            value = clean_sponsor(raw)
+        elif field == "visa_class":
+            value = raw.upper().replace(" ", "-")
+        else:
+            value = raw.casefold()
+        if value:
+            corrections[field] = value
+    return corrections
+
+
 def choose(field: str, options: list[Evidence]) -> str:
     if not options:
         return DEFAULTS[field]
@@ -1091,10 +1160,13 @@ def decide(
     visible_clean_biometrics: bool,
     visible_paid_fee: bool,
     explicit_manual_approval: bool = False,
+    explicit_manual_review: bool = False,
     trusted_stale_arrival: bool = False,
     unresolved_manual_note: bool = False,
 ) -> tuple[str, float]:
     flags = set(row["risk_flags"].split("|")) if row["risk_flags"] != "none" else set()
+    if explicit_manual_review:
+        return "NEEDS_REVIEW", 0.99
     # An unconflicted, explicitly labeled visible finding is the highest
     # authority in the public evidence order. It may record an exception to a
     # lower-priority fee or visa fact, but never overrides observed risk.
@@ -1111,7 +1183,10 @@ def decide(
         return "NEEDS_REVIEW", 0.99
     if trusted_stale_arrival:
         return "DENIED", 0.97
-    if row["visa_class"] not in {"unknown", "DIP-1"} and row["sponsor_id"] in STRICT_DENIAL_SPONSORS:
+    strict_revocation = row["sponsor_id"] in STRICT_DENIAL_SPONSORS or (
+        row["sponsor_id"] == "SPN-4040" and row["fee_status"] == "paid"
+    )
+    if row["visa_class"] not in {"unknown", "DIP-1"} and strict_revocation:
         return "DENIED", 0.97
     if row["visa_class"] == "unknown" or row["arrival_date"] == "1900-01-01" or row["fee_status"] == "unknown":
         return "NEEDS_REVIEW", 0.45
@@ -1143,6 +1218,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
     sponsor_applicant_candidates: set[str] = set()
     sponsor_attestations: set[tuple[str, str, str, str]] = set()
     approximate_applicant_candidates: set[str] = set()
+    manual_correction_candidates: dict[str, set[str]] = defaultdict(set)
     visible_ocr_texts: list[str] = []
     model_ocr_texts: list[str] = []
     trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
@@ -1169,6 +1245,8 @@ def predict(pdf_path: Path) -> dict[str, object]:
                 visible_ocr_texts.append(text)
                 if target_evidence is evidence:
                     approximate_applicant_candidates.update(approximate_labeled_applicants(text))
+                    for field, value in exact_manual_corrections(text).items():
+                        manual_correction_candidates[field].add(value)
                 manual_finding = exact_manual_finding(text)
                 if manual_finding:
                     manual_findings.append(manual_finding)
@@ -1252,6 +1330,12 @@ def predict(pdf_path: Path) -> dict[str, object]:
     if retry_adverse != "none":
         native_adverse = row["risk_flags"] if row["risk_flags"] != "none" else ""
         row["risk_flags"] = "|".join(sorted(set(filter(None, (native_adverse + "|" + retry_adverse).split("|")))))
+    if row["risk_flags"] == DEFAULTS["risk_flags"]:
+        packet_adverse = exact_packet_adverse_flags(visible_ocr_texts)
+        if packet_adverse:
+            row["risk_flags"] = packet_adverse
+    if len(manual_correction_candidates["applicant_name"]) == 1:
+        row["applicant_name"] = next(iter(manual_correction_candidates["applicant_name"]))
     if len(sponsor_applicant_candidates) == 1:
         attested_applicant = next(iter(sponsor_applicant_candidates))
         agreement = SequenceMatcher(
@@ -1300,6 +1384,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
             row["fee_status"] = recovered_fee
         elif len(whole_fee_candidates) == 1:
             row["fee_status"] = next(iter(whole_fee_candidates))
+    output_fallback_date = unique_visible_arrival_date(visible_ocr_texts)
     for field in CATEGORY_VOCABULARY:
         candidates = category_candidates[field]
         if field in {"species_code", "home_world"} and len(candidates) == 1:
@@ -1318,6 +1403,9 @@ def predict(pdf_path: Path) -> dict[str, object]:
             row[field] = next(iter(retry_candidates))
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])
+    for field, values in manual_correction_candidates.items():
+        if len(values) == 1:
+            row[field] = next(iter(values))
     manual_finding_values = set(manual_findings)
     if len(manual_finding_values) == 1:
         finding = next(iter(manual_finding_values))
@@ -1333,6 +1421,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
     explicit_manual_approval = (
         manual_finding_values == {"APPROVED"}
     )
+    explicit_manual_review = manual_finding_values == {"NEEDS_REVIEW"}
     trusted_stale_arrival = False
     if row["visa_class"] not in {"unknown", "DIP-1"} and row["arrival_date"] != "1900-01-01":
         try:
@@ -1349,12 +1438,14 @@ def predict(pdf_path: Path) -> dict[str, object]:
         visible_clean_biometrics=visible_clean_biometrics,
         visible_paid_fee=visible_paid_fee,
         explicit_manual_approval=explicit_manual_approval,
+        explicit_manual_review=explicit_manual_review,
         trusted_stale_arrival=trusted_stale_arrival,
         unresolved_manual_note=saw_manual_note_page and not manual_findings,
     )
     denial_probability = visible_ocr_denial_probability(model_ocr_texts)
     if (
         adjudication == "NEEDS_REVIEW"
+        and not explicit_manual_review
         and denial_probability >= float(DENIAL_TEXT_MODEL.get("threshold", 1.0))
     ):
         adjudication, confidence = "DENIED", 0.87
@@ -1366,11 +1457,13 @@ def predict(pdf_path: Path) -> dict[str, object]:
     )
     if (
         adjudication == "NEEDS_REVIEW"
+        and not explicit_manual_review
         and approval_probability >= float(APPROVAL_TEXT_MODEL.get("threshold", 1.0))
     ):
         adjudication, confidence = "APPROVED", 0.97
     elif (
         adjudication == "NEEDS_REVIEW"
+        and not explicit_manual_review
         and paired_approval_recovery(
             row,
             approval_probability=approval_probability,
@@ -1379,6 +1472,8 @@ def predict(pdf_path: Path) -> dict[str, object]:
         )
     ):
         adjudication, confidence = "APPROVED", 0.94
+    if row["arrival_date"] == DEFAULTS["arrival_date"] and output_fallback_date:
+        row["arrival_date"] = output_fallback_date
     return {"case_id": pdf_path.stem, **row, "adjudication": adjudication, "confidence": confidence}
 
 

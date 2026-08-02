@@ -56,3 +56,8 @@ zero catastrophic false approvals, and clear the full Docker gate.
   and exact visible manual findings changed 45 names, 26 purposes, 15 sponsors,
   13 visa classes, and 6 adjudications; every change was correct across the
   development/holdout split, with no formerly correct value displaced.
+- The next deterministic evidence stack cleared the full Docker gate at
+  `126.381740`, again with `1000 / 1000` valid rows and zero catastrophic false
+  approvals. Exact manual corrections, output-only date consensus, exact
+  adverse flags, and a paid `SPN-4040` denial conjunction improved extraction,
+  classification, and calibration without displacing a correct field.

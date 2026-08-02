@@ -1,0 +1,131 @@
+{
+  "change_vs_baseline": {
+    "adjudication_changes": 3,
+    "approval_additions": 0,
+    "approval_removals": 0,
+    "field_changes": {
+      "applicant_name": 1,
+      "arrival_date": 57,
+      "declared_purpose": 0,
+      "fee_status": 0,
+      "home_world": 0,
+      "risk_flags": 19,
+      "species_code": 0,
+      "sponsor_id": 23,
+      "visa_class": 0
+    },
+    "shared_rows": 1000
+  },
+  "decisions": {
+    "accuracy": 0.813,
+    "brier": 0.088207,
+    "catastrophic_false_approvals": 0,
+    "confusion": {
+      "APPROVED": {
+        "APPROVED": 134,
+        "DENIED": 10,
+        "NEEDS_REVIEW": 145
+      },
+      "DENIED": {
+        "DENIED": 411,
+        "NEEDS_REVIEW": 20
+      },
+      "NEEDS_REVIEW": {
+        "APPROVED": 2,
+        "DENIED": 10,
+        "NEEDS_REVIEW": 268
+      }
+    },
+    "correct": 813,
+    "total": 1000
+  },
+  "grouped": {
+    "development": {
+      "decision_accuracy": 0.83908,
+      "per_field_accuracy": {
+        "applicant_name": 0.804598,
+        "arrival_date": 0.854406,
+        "declared_purpose": 0.860153,
+        "fee_status": 0.618774,
+        "home_world": 0.913793,
+        "risk_flags": 0.775862,
+        "species_code": 0.944444,
+        "sponsor_id": 0.842912,
+        "visa_class": 0.858238
+      },
+      "rows": 522
+    },
+    "holdout": {
+      "decision_accuracy": 0.784519,
+      "per_field_accuracy": {
+        "applicant_name": 0.786611,
+        "arrival_date": 0.845188,
+        "declared_purpose": 0.851464,
+        "fee_status": 0.606695,
+        "home_world": 0.905858,
+        "risk_flags": 0.780335,
+        "species_code": 0.937238,
+        "sponsor_id": 0.845188,
+        "visa_class": 0.84728
+      },
+      "rows": 478
+    }
+  },
+  "per_field": {
+    "applicant_name": {
+      "accuracy": 0.796,
+      "correct": 796,
+      "total": 1000
+    },
+    "arrival_date": {
+      "accuracy": 0.85,
+      "correct": 850,
+      "total": 1000
+    },
+    "declared_purpose": {
+      "accuracy": 0.856,
+      "correct": 856,
+      "total": 1000
+    },
+    "fee_status": {
+      "accuracy": 0.613,
+      "correct": 613,
+      "total": 1000
+    },
+    "home_world": {
+      "accuracy": 0.91,
+      "correct": 910,
+      "total": 1000
+    },
+    "risk_flags": {
+      "accuracy": 0.778,
+      "correct": 778,
+      "total": 1000
+    },
+    "species_code": {
+      "accuracy": 0.941,
+      "correct": 941,
+      "total": 1000
+    },
+    "sponsor_id": {
+      "accuracy": 0.844,
+      "correct": 844,
+      "total": 1000
+    },
+    "visa_class": {
+      "accuracy": 0.853,
+      "correct": 853,
+      "total": 1000
+    }
+  },
+  "reference_coverage": {
+    "comparable_rows": 1000,
+    "extra_prediction_ids": 0,
+    "missing_prediction_ids": 0
+  },
+  "runtime": {
+    "seconds_per_pdf": 1.318,
+    "total_seconds": 1318.0
+  },
+  "valid_rows": 1000
+}
