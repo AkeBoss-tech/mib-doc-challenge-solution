@@ -45,6 +45,13 @@ class VisiblePipelineTests(unittest.TestCase):
 
     def test_schema_label_is_not_a_person_name(self):
         self.assertEqual(solution.clean_name("Case ID"), "")
+
+    def test_name_cleaning_removes_visible_grammar_and_image_labels(self):
+        self.assertEqual(solution.clean_name("is Nexix Nexvara"), "Nexix Nexvara")
+        self.assertEqual(
+            solution.clean_name("Ludane Qorvoss PASSPORT IMAGE"),
+            "Ludane Qorvoss",
+        )
         self.assertEqual(solution.clean_name("Species Code"), "")
 
     def test_disqualifying_flag_cannot_approve(self):
@@ -222,6 +229,11 @@ class VisiblePipelineTests(unittest.TestCase):
             solution.decide(row, "", visible_clean_biometrics=False, visible_paid_fee=True)[0],
             "DENIED",
         )
+        row["sponsor_id"] = "SPN-2718"
+        self.assertEqual(
+            solution.decide(row, "", visible_clean_biometrics=False, visible_paid_fee=True)[0],
+            "DENIED",
+        )
 
     def test_default_none_cannot_create_an_approval(self):
         row = dict(solution.DEFAULTS)
@@ -294,6 +306,45 @@ class VisiblePipelineTests(unittest.TestCase):
         finally:
             solution.CATEGORY_VOCABULARY = original
 
+    def test_visible_ocr_denial_model_masks_identifiers(self):
+        first = solution.visible_ocr_denial_probability(("Case MIB-000123 denied note",))
+        second = solution.visible_ocr_denial_probability(("Case MIB-999876 denied note",))
+        self.assertAlmostEqual(first, second)
+
+    def test_visible_ocr_approval_model_masks_identifiers(self):
+        first = solution.visible_ocr_approval_probability(("Case MIB-000123 approved note",))
+        second = solution.visible_ocr_approval_probability(("Case MIB-999876 approved note",))
+        self.assertAlmostEqual(first, second)
+        self.assertGreaterEqual(first, 0.0)
+        self.assertLessEqual(first, 1.0)
+
+    def test_paired_approval_recovery_requires_complete_policy_and_denial_veto(self):
+        row = {
+            "applicant_name": "Veenax Ixoul", "species_code": "ARCTURIAN",
+            "home_world": "Luyten-b", "visa_class": "XW-2",
+            "sponsor_id": "SPN-1234", "arrival_date": "2026-07-01",
+            "declared_purpose": "research", "risk_flags": "none",
+            "fee_status": "paid",
+        }
+        self.assertTrue(solution.paired_approval_recovery(
+            row, approval_probability=0.80, denial_probability=0.20,
+        ))
+        self.assertFalse(solution.paired_approval_recovery(
+            row, approval_probability=0.80, denial_probability=0.31,
+        ))
+        incomplete = dict(row, arrival_date="1900-01-01")
+        self.assertFalse(solution.paired_approval_recovery(
+            incomplete, approval_probability=0.80, denial_probability=0.20,
+        ))
+        revoked = dict(row, sponsor_id="SPN-4040")
+        self.assertFalse(solution.paired_approval_recovery(
+            revoked, approval_probability=0.80, denial_probability=0.20,
+        ))
+        self.assertTrue(solution.paired_approval_recovery(
+            row, approval_probability=0.55, denial_probability=0.35,
+            affirmative_clean_biometrics=True,
+        ))
+
     def test_page_diagnostics_are_visible_pixel_and_deterministic(self):
         image = Image.new("RGB", (20, 10), "white")
         image.putpixel((3, 4), (0, 0, 0))
@@ -304,6 +355,33 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual((first.width, first.height), (20, 10))
         self.assertGreater(first.dark_pixel_fraction, 0)
         self.assertEqual(first.orientation_correction_degrees, 0)
+
+    def test_orientation_retry_requires_schema_label_gain(self):
+        image = Image.new("L", (20, 10), "white")
+        image.putpixel((0, 0), 0)
+
+        def reader(rotated, psm):
+            if rotated.getpixel((0, rotated.height - 1)) == 0:
+                return "Case ID Applicant Visa Class Sponsor ID Arrival Date"
+            return "noise"
+
+        selected, texts, angle = solution.orient_page_from_sparse_retry(
+            image, ("unresolved",), read_variant=reader,
+        )
+        self.assertEqual(angle, 90)
+        self.assertEqual(selected.size, (10, 20))
+        self.assertGreaterEqual(solution.orientation_label_score(texts), 3)
+
+    def test_orientation_retry_leaves_resolved_page_untouched(self):
+        image = Image.new("L", (20, 10), "white")
+        selected, texts, angle = solution.orient_page_from_sparse_retry(
+            image,
+            ("Case ID: MIB-1\nApplicant: Qor\nVisa Class: XW-2",),
+            read_variant=lambda *_: self.fail("resolved page must not retry"),
+        )
+        self.assertIs(selected, image)
+        self.assertEqual(angle, 0)
+        self.assertEqual(len(texts), 1)
 
     def test_region_proposal_uses_visible_label_not_a_field_value(self):
         words = (
@@ -379,6 +457,35 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(entry.conflicts, ("unpaid",))
         self.assertEqual(entry.candidates, (weak, strong))
         self.assertEqual(entry.resolution_reason, "highest_anchor_then_ocr_quality")
+
+    def test_name_consensus_can_outvote_one_higher_priority_ocr_error(self):
+        options = [
+            solution.Evidence("applicant_name", "Veenax Ixoul", "registry", 0.60),
+            solution.Evidence("applicant_name", "Veenax Ixoul", "sponsor", 0.70),
+            solution.Evidence("applicant_name", "Veenax Ixoal", "intake", 1.00),
+        ]
+        self.assertEqual(solution.choose("applicant_name", options), "Veenax Ixoul")
+
+    def test_name_consensus_rejects_an_equal_corroboration_tie(self):
+        options = [
+            solution.Evidence("applicant_name", "Veenax Ixoul", "registry", 0.60),
+            solution.Evidence("applicant_name", "Veenax Ixoul", "sponsor", 0.70),
+            solution.Evidence("applicant_name", "Veenax Ixoal", "intake", 1.00),
+            solution.Evidence("applicant_name", "Veenax Ixoal", "note", 1.00),
+        ]
+        self.assertEqual(solution.choose("applicant_name", options), "Veenax Ixoal")
+
+    def test_sponsor_attestation_sentence_exposes_only_its_named_applicant(self):
+        self.assertEqual(
+            solution.sponsor_attested_applicant(
+                "Sponsor SPN-1234 attests that Veenax Ixoul is expected on Earth for research."
+            ),
+            "Veenax Ixoul",
+        )
+        self.assertEqual(
+            solution.sponsor_attested_applicant("Applicant Veenax Ixoul is expected on Earth."),
+            "",
+        )
 
     def test_sponsor_fallback_requires_two_high_quality_distinct_native_crops(self):
         first = solution.CandidateValue(

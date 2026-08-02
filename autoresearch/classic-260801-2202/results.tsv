@@ -1,0 +1,15 @@
+iteration	lever	total	extraction	classification	calibration	cfa	status
+0	validated_incumbent	119.462216	39.245556	64.690000	15.526660	0	keep
+1	docker_native_text_routing	120.465540	39.245556	65.650000	15.569984	0	pending_full_docker
+2	adaptive_orientation_overwrite					0	reject_development_field_regressions
+3	adaptive_orientation_selective_merge					0	keep_grouped_pending_full_docker
+4	paired_approval_safety_gate	122.278	39.245556	67.430000	15.602	0	keep_crossfit_and_derived_pending_full
+5	name_sponsor_evidence_resolution	122.965	39.932222	67.430000	15.602	0	keep_grouped_pending_full
+6	reason_specific_recalibration	123.493	39.932222	67.430000	16.130	0	keep_grouped_pending_full
+7	additional_strict_revoked_sponsors	123.793	39.932222	67.730000	16.130	0	keep_grouped_pending_full
+8	diverse_router_ensemble					0	reject_no_crossfit_gain_over_paired_gate
+9	text_correctness_calibrator					0	reject_oof_brier_regression
+10	orientation_plus_primary_paired_gate_full	122.968760	39.995556	67.310000	15.663204	0	validated_full_docker
+11	crossfit_dynamic_review_calibration					0	reject_negligible_oof_brier_gain
+12	selective_degraded_page_retry					0	reject_negligible_dev_only_gain
+13	validated_124_stack	124.514335	40.451111	67.850000	16.213224	0	validated_full_docker

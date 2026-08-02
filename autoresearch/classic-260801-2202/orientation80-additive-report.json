@@ -1,0 +1,122 @@
+{
+  "change_vs_baseline": {
+    "adjudication_changes": 1,
+    "approval_additions": 1,
+    "approval_removals": 0,
+    "field_changes": {
+      "applicant_name": 8,
+      "arrival_date": 5,
+      "declared_purpose": 8,
+      "fee_status": 1,
+      "home_world": 4,
+      "risk_flags": 2,
+      "species_code": 4,
+      "sponsor_id": 2,
+      "visa_class": 4
+    },
+    "shared_rows": 80
+  },
+  "decisions": {
+    "accuracy": 0.6125,
+    "brier": 0.057111,
+    "catastrophic_false_approvals": 0,
+    "confusion": {
+      "APPROVED": {
+        "APPROVED": 15,
+        "DENIED": 1,
+        "NEEDS_REVIEW": 24
+      },
+      "DENIED": {
+        "DENIED": 34,
+        "NEEDS_REVIEW": 6
+      }
+    },
+    "correct": 49,
+    "total": 80
+  },
+  "grouped": {
+    "development": {
+      "decision_accuracy": 0.675,
+      "per_field_accuracy": {
+        "applicant_name": 0.6,
+        "arrival_date": 0.75,
+        "declared_purpose": 0.725,
+        "fee_status": 0.55,
+        "home_world": 0.9,
+        "risk_flags": 0.775,
+        "species_code": 0.95,
+        "sponsor_id": 0.675,
+        "visa_class": 0.8
+      },
+      "rows": 40
+    },
+    "holdout": {
+      "decision_accuracy": 0.55,
+      "per_field_accuracy": {
+        "applicant_name": 0.675,
+        "arrival_date": 0.8,
+        "declared_purpose": 0.825,
+        "fee_status": 0.55,
+        "home_world": 0.9,
+        "risk_flags": 0.75,
+        "species_code": 0.925,
+        "sponsor_id": 0.8,
+        "visa_class": 0.825
+      },
+      "rows": 40
+    }
+  },
+  "per_field": {
+    "applicant_name": {
+      "accuracy": 0.6375,
+      "correct": 51,
+      "total": 80
+    },
+    "arrival_date": {
+      "accuracy": 0.775,
+      "correct": 62,
+      "total": 80
+    },
+    "declared_purpose": {
+      "accuracy": 0.775,
+      "correct": 62,
+      "total": 80
+    },
+    "fee_status": {
+      "accuracy": 0.55,
+      "correct": 44,
+      "total": 80
+    },
+    "home_world": {
+      "accuracy": 0.9,
+      "correct": 72,
+      "total": 80
+    },
+    "risk_flags": {
+      "accuracy": 0.7625,
+      "correct": 61,
+      "total": 80
+    },
+    "species_code": {
+      "accuracy": 0.9375,
+      "correct": 75,
+      "total": 80
+    },
+    "sponsor_id": {
+      "accuracy": 0.7375,
+      "correct": 59,
+      "total": 80
+    },
+    "visa_class": {
+      "accuracy": 0.8125,
+      "correct": 65,
+      "total": 80
+    }
+  },
+  "reference_coverage": {
+    "comparable_rows": 80,
+    "extra_prediction_ids": 0,
+    "missing_prediction_ids": 0
+  },
+  "valid_rows": 80
+}

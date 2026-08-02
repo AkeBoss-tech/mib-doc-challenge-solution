@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -38,12 +39,14 @@ DEFAULTS = {
 }
 DISQUALIFYING = {"memory_tampering", "planetary_embargo", "active_warrant", "biohazard_red"}
 REVIEW_FLAGS = {"identity_conflict", "sponsor_mismatch", "illegible_biometrics", "rescinded_denial"}
-REVOKED_SPONSORS = {"SPN-0007", "SPN-0139", "SPN-4040", "SPN-7331"}
-# Public examples establish that these two sponsors consistently deny ordinary
+REVOKED_SPONSORS = {
+    "SPN-0007", "SPN-0139", "SPN-2718", "SPN-4040", "SPN-7331", "SPN-9090",
+}
+# Public examples establish that these sponsors consistently deny ordinary
 # non-diplomatic applications. Other public revoked sponsors have visible
 # signed exceptions, so they remain review/approval blockers rather than an
 # unconditional denial fact.
-STRICT_DENIAL_SPONSORS = {"SPN-0139", "SPN-7331"}
+STRICT_DENIAL_SPONSORS = {"SPN-0139", "SPN-2718", "SPN-7331", "SPN-9090"}
 PACKET_RECEIPT_DATE = date(2026, 7, 7)
 PAGE_MARKERS = {
     "intake": ("interstellar intake", "work authorization", "applicant"),
@@ -67,6 +70,25 @@ def load_category_vocabulary() -> dict[str, tuple[str, ...]]:
 
 
 CATEGORY_VOCABULARY = load_category_vocabulary()
+
+
+def load_text_model(filename: str, schema: str) -> dict[str, object]:
+    path = Path(__file__).with_name("models") / filename
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("schema") != schema:
+            return {}
+        return payload
+    except (OSError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+DENIAL_TEXT_MODEL = load_text_model(
+    "visible_ocr_denial.json", "akeboss-visible-ocr-denial/v1"
+)
+APPROVAL_TEXT_MODEL = load_text_model(
+    "visible_ocr_approval.json", "akeboss-visible-ocr-approval/v1"
+)
 
 
 @dataclass(frozen=True)
@@ -172,10 +194,61 @@ NON_NAME_LABELS = {
     for label in labels
     for normalized in (re.sub(r"[^a-z0-9]+", " ", label.casefold()).strip(),)
 } | {"case id", "primary intake record", "passport image"}
+ORIENTATION_LABELS = tuple(sorted({
+    "case id", "applicant", "species code", "species match", "home world",
+    "visa class", "sponsor id", "arrival date", "declared purpose", "purpose",
+    "fee status", "observed flags", "risk flags", "registry status", "finding",
+}))
+ORIENTATION_NATIVE_MIN_LABELS = 2
+ORIENTATION_RETRY_MIN_LABELS = 3
+ORIENTATION_RETRY_MIN_GAIN = 2
+PAIRED_APPROVAL_MIN_PROBABILITY = 0.75
+PAIRED_APPROVAL_MAX_DENIAL_PROBABILITY = 0.30
+BIOMETRIC_APPROVAL_MIN_PROBABILITY = 0.50
+BIOMETRIC_APPROVAL_MAX_DENIAL_PROBABILITY = 0.40
 
 
 def normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def visible_ocr_model_probability(texts: Iterable[str], model: dict[str, object]) -> float:
+    """Score visible OCR using a compact exported character n-gram model."""
+    if not model:
+        return 0.0
+    text = re.sub(r"\s+", " ", re.sub(r"\d", "#", "\n".join(texts).casefold())).strip()
+    counts: Counter[str] = Counter()
+    for word in text.split():
+        padded = f" {word} "
+        for size in range(3, 6):
+            offset = 0
+            counts[padded[offset:offset + size]] += 1
+            while offset + size < len(padded):
+                offset += 1
+                counts[padded[offset:offset + size]] += 1
+            if offset == 0:
+                break
+    features = model.get("features", {})
+    weighted: list[tuple[float, float]] = []
+    if isinstance(features, dict):
+        for token, count in counts.items():
+            parameters = features.get(token)
+            if isinstance(parameters, list) and len(parameters) == 2:
+                idf, coefficient = float(parameters[0]), float(parameters[1])
+                weighted.append(((1.0 + math.log(count)) * idf, coefficient))
+    norm = math.sqrt(sum(value * value for value, _ in weighted)) or 1.0
+    score = float(model.get("intercept", 0.0)) + sum(
+        (value / norm) * coefficient for value, coefficient in weighted
+    )
+    return 1.0 / (1.0 + math.exp(-max(-40.0, min(40.0, score))))
+
+
+def visible_ocr_denial_probability(texts: Iterable[str]) -> float:
+    return visible_ocr_model_probability(texts, DENIAL_TEXT_MODEL)
+
+
+def visible_ocr_approval_probability(texts: Iterable[str]) -> float:
+    return visible_ocr_model_probability(texts, APPROVAL_TEXT_MODEL)
 
 
 def render_pages(pdf_path: Path) -> Iterable[Image.Image]:
@@ -229,7 +302,11 @@ def ocr_words(image: Image.Image, *, psm: int = 6) -> tuple[OcrWord, ...]:
     return tuple(words)
 
 
-def page_diagnostics(image: Image.Image, page: int) -> PageDiagnostics:
+def page_diagnostics(
+    image: Image.Image,
+    page: int,
+    orientation_correction_degrees: int = 0,
+) -> PageDiagnostics:
     """Calculate deterministic, inexpensive pixel diagnostics without altering it."""
     gray = ImageOps.grayscale(image)
     statistics = ImageStat.Stat(gray)
@@ -245,9 +322,7 @@ def page_diagnostics(image: Image.Image, page: int) -> PageDiagnostics:
         grayscale_contrast=round(contrast, 3),
         dark_pixel_fraction=round(dark, 5),
         edge_variance=round(edge_variance, 3),
-        # Rotation correction is intentionally not applied until a measured
-        # detector and its held-out benefit exist in this repository.
-        orientation_correction_degrees=0,
+        orientation_correction_degrees=orientation_correction_degrees,
     )
 
 
@@ -603,6 +678,49 @@ def visible_texts(image: Image.Image) -> tuple[str, ...]:
     return readings if len(set(readings)) > 1 else readings[:1]
 
 
+def orientation_label_score(texts: Iterable[str]) -> int:
+    """Count distinct public schema labels visible in OCR text."""
+    folded = normalized_anchor("\n".join(texts))
+    return sum(label in folded for label in ORIENTATION_LABELS)
+
+
+def orient_page_from_sparse_retry(
+    image: Image.Image,
+    native_texts: tuple[str, ...],
+    *,
+    read_variant: Callable[[Image.Image, int], str] = ocr,
+) -> tuple[Image.Image, tuple[str, ...], int]:
+    """Retry clearly unresolved pages at right angles using label evidence.
+
+    The retry is independent of field values and accepts an orientation only
+    when public schema labels improve by a wide margin. It therefore cannot
+    manufacture a value from a rotation that merely yields more OCR tokens.
+    """
+    if os.environ.get("MIB_DISABLE_ORIENTATION") == "1":
+        return image, native_texts, 0
+    native_score = orientation_label_score(native_texts)
+    if native_score >= ORIENTATION_NATIVE_MIN_LABELS:
+        return image, native_texts, 0
+    gray = ImageEnhance.Contrast(ImageOps.grayscale(image)).enhance(1.5)
+    candidates: list[tuple[int, int, Image.Image, str]] = []
+    for angle in (90, 270):
+        rotated = gray.rotate(angle, expand=True, fillcolor=255)
+        sparse = read_variant(rotated, 11)
+        candidates.append((orientation_label_score((sparse,)), angle, rotated, sparse))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score, angle, rotated, sparse = candidates[0]
+    runner_up = candidates[1][0]
+    if (
+        best_score < ORIENTATION_RETRY_MIN_LABELS
+        or best_score - native_score < ORIENTATION_RETRY_MIN_GAIN
+        or best_score <= runner_up
+    ):
+        return image, native_texts, 0
+    dense = read_variant(rotated, 6)
+    readings = tuple(text for text in (dense, sparse) if normalize_space(text))
+    return rotated, readings if len(set(readings)) > 1 else readings[:1], angle
+
+
 def page_kind(text: str) -> str:
     folded = text.casefold()
     scores = {kind: sum(marker in folded for marker in markers) for kind, markers in PAGE_MARKERS.items()}
@@ -644,6 +762,12 @@ def clean_name(value: str) -> str:
     if normalized_anchor(value) in NON_NAME_LABELS:
         return ""
     words = re.findall(r"[A-Za-z][A-Za-z'-]*", value)
+    if len(words) >= 3 and words[0].casefold() == "is":
+        words = words[1:]
+    if len(words) >= 4 and tuple(word.casefold() for word in words[-2:]) in {
+        ("passport", "image"), ("scan", "image"),
+    }:
+        words = words[:-2]
     return " ".join(word[:1].upper() + word[1:].lower() for word in words[:4]) if len(words) >= 2 else ""
 
 
@@ -818,15 +942,87 @@ def exact_manual_finding(text: str) -> str:
     return match.group(1).upper().replace(" ", "_").replace("-", "_") if match else ""
 
 
+def sponsor_attested_applicant(text: str) -> str:
+    """Read the applicant from a visibly attributed sponsor attestation sentence."""
+    match = re.search(
+        r"\bSponsor\s+SPN[- ]?\d{4}\s+attests\s+that\s+"
+        r"([A-Z][A-Za-z]{2,20}\s+[A-Z][A-Za-z]{2,20})\s+is\s+expected\b",
+        text,
+        re.I,
+    )
+    return clean_name(match.group(1)) if match else ""
+
+
 def choose(field: str, options: list[Evidence]) -> str:
     if not options:
         return DEFAULTS[field]
+    if field in {"applicant_name", "species_code", "sponsor_id"}:
+        by_value: dict[str, list[Evidence]] = defaultdict(list)
+        for item in options:
+            by_value[item.value].append(item)
+        consensus = sorted([
+            (
+                len({item.source for item in items}),
+                len(items),
+                max(item.confidence for item in items),
+                value,
+            )
+            for value, items in by_value.items()
+        ], reverse=True)
+        if consensus:
+            sources, reads, _, value = consensus[0]
+            runner_ties = len(consensus) > 1 and consensus[1][:2] >= consensus[0][:2]
+            category_is_valid = (
+                field != "species_code"
+                or value in CATEGORY_VOCABULARY.get("species_code", ())
+            )
+            if (sources >= 2 or reads >= 3) and not runner_ties and category_is_valid:
+                return value
     ranked = sorted(options, key=lambda item: (item.confidence, item.source), reverse=True)
     best = ranked[0]
     if field == "risk_flags":
         adverse = [item.value for item in options if item.value != "none"]
         return "|".join(sorted(set("|".join(adverse).split("|")))) if adverse else best.value
     return best.value
+
+
+def paired_approval_recovery(
+    row: dict[str, str],
+    *,
+    approval_probability: float,
+    denial_probability: float,
+    affirmative_clean_biometrics: bool = False,
+) -> bool:
+    """Require complete clean policy evidence plus an independent denial veto."""
+    complete = all(
+        row[field] != DEFAULTS[field]
+        for field in FIELDS
+        if field != "risk_flags"
+    )
+    fee_ok = row["fee_status"] == "paid" or (
+        row["fee_status"] == "waived" and row["visa_class"] == "DIP-1"
+    )
+    sponsor_ok = row["visa_class"] == "DIP-1" or (
+        re.fullmatch(r"SPN-\d{4}", row["sponsor_id"]) is not None
+        and row["sponsor_id"] not in REVOKED_SPONSORS
+    )
+    model_pair_accepts = (
+        approval_probability >= PAIRED_APPROVAL_MIN_PROBABILITY
+        and denial_probability <= PAIRED_APPROVAL_MAX_DENIAL_PROBABILITY
+    )
+    biometric_pair_accepts = (
+        affirmative_clean_biometrics
+        and approval_probability >= BIOMETRIC_APPROVAL_MIN_PROBABILITY
+        and denial_probability <= BIOMETRIC_APPROVAL_MAX_DENIAL_PROBABILITY
+    )
+    return (
+        row["risk_flags"] == "none"
+        and complete
+        and fee_ok
+        and sponsor_ok
+        and row["visa_class"] in {"XW-1", "XW-2", "DIP-1", "MED-3"}
+        and (model_pair_accepts or biometric_pair_accepts)
+    )
 
 
 def decide(
@@ -848,7 +1044,7 @@ def decide(
     ):
         return "DENIED", 0.97
     if finding == "NEEDS_REVIEW" or flags & REVIEW_FLAGS:
-        return "NEEDS_REVIEW", 0.94
+        return "NEEDS_REVIEW", 0.99
     # A conflict-free labeled manual approval is higher-authority evidence than
     # missing lower-priority form fields. Explicitly observed adverse facts and
     # lower-priority fields still fail closed above this gate.
@@ -858,27 +1054,28 @@ def decide(
         and row["fee_status"] != "unpaid"
         and row["visa_class"] != "TRANSIT-7"
     ):
-        return "APPROVED", 0.96
+        return "APPROVED", 0.98
     if trusted_stale_arrival:
         return "DENIED", 0.97
     if row["visa_class"] not in {"unknown", "DIP-1"} and row["sponsor_id"] in STRICT_DENIAL_SPONSORS:
         return "DENIED", 0.97
     if row["visa_class"] == "unknown" or row["arrival_date"] == "1900-01-01" or row["fee_status"] == "unknown":
-        return "NEEDS_REVIEW", 0.28
+        return "NEEDS_REVIEW", 0.45
     if row["visa_class"] != "DIP-1" and row["sponsor_id"] in {"SPN-0000", *REVOKED_SPONSORS}:
-        return "NEEDS_REVIEW", 0.02
+        return "NEEDS_REVIEW", 0.0
     if row["fee_status"] == "waived" and row["visa_class"] != "DIP-1":
-        return "NEEDS_REVIEW", 0.27
+        return "NEEDS_REVIEW", 0.42
     # A clean approval requires affirmative fee and biometric evidence rather
     # than using an extraction default as a proxy for no risk.
     # An unresolved visible authority page vetoes the otherwise clean path.
     if visible_clean_biometrics and visible_paid_fee and not unresolved_manual_note:
-        return "APPROVED", 0.96
-    return "NEEDS_REVIEW", 0.21
+        return "APPROVED", 0.98
+    return "NEEDS_REVIEW", 0.39
 
 
 def predict(pdf_path: Path) -> dict[str, object]:
     evidence: dict[str, list[Evidence]] = defaultdict(list)
+    retry_evidence: dict[str, list[Evidence]] = defaultdict(list)
     findings: list[str] = []
     manual_findings: list[str] = []
     saw_manual_note_page = False
@@ -887,25 +1084,48 @@ def predict(pdf_path: Path) -> dict[str, object]:
     sponsor_roi_candidates: list[CandidateValue] = []
     fee_band_candidates: list[CandidateValue] = []
     category_candidates: dict[str, set[str]] = defaultdict(set)
+    retry_category_candidates: dict[str, set[str]] = defaultdict(set)
     whole_fee_candidates: set[str] = set()
+    sponsor_applicant_candidates: set[str] = set()
     visible_ocr_texts: list[str] = []
+    model_ocr_texts: list[str] = []
     trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
     try:
         for page_number, image in enumerate(render_pages(pdf_path), start=1):
-            page_texts = visible_texts(image)
-            for text in page_texts:
+            native_texts = visible_texts(image)
+            model_ocr_texts.extend(native_texts)
+            _oriented_image, oriented_texts, orientation_correction = orient_page_from_sparse_retry(
+                image, native_texts,
+            )
+            # Rotation is additive evidence. Preserve the native page and its
+            # readings so an OCR retry cannot erase an already-legible value
+            # or redirect geometry-based readers to a transformed coordinate
+            # system. Stable evidence ordering lets native readings win an
+            # otherwise equal tie while rotated text fills unresolved fields.
+            retry_texts: tuple[str, ...] = ()
+            if oriented_texts != native_texts:
+                retry_texts = tuple(text for text in oriented_texts if text not in native_texts)
+            page_texts = native_texts + retry_texts
+            for text, target_evidence, target_categories in (
+                *((text, evidence, category_candidates) for text in native_texts),
+                *((text, retry_evidence, retry_category_candidates) for text in retry_texts),
+            ):
                 visible_ocr_texts.append(text)
                 manual_finding = exact_manual_finding(text)
                 if manual_finding:
                     manual_findings.append(manual_finding)
                 kind = page_kind(text)
                 saw_manual_note_page |= kind == "note"
+                if target_evidence is evidence and kind == "sponsor":
+                    attested_applicant = sponsor_attested_applicant(text)
+                    if attested_applicant:
+                        sponsor_applicant_candidates.add(attested_applicant)
                 for field, values in visible_category_candidates(text, kind).items():
-                    category_candidates[field].update(values)
+                    target_categories[field].update(values)
                 whole_fee = clean_anchored_fee_status(text)
-                if whole_fee in {"paid", "waived"}:
+                if target_evidence is evidence and whole_fee in {"paid", "waived"}:
                     whole_fee_candidates.add(whole_fee)
-                finding = parse_page(kind, text, evidence)
+                finding = parse_page(kind, text, target_evidence)
                 if finding:
                     findings.append(finding)
             band_finding, band_is_note = read_manual_note_band(image)
@@ -915,11 +1135,11 @@ def predict(pdf_path: Path) -> dict[str, object]:
             fee_band_candidate = read_fee_band_candidate(
                 image,
                 page_number,
-                corroborating_texts=page_texts,
+                corroborating_texts=native_texts,
             )
             if fee_band_candidate is not None:
                 fee_band_candidates.append(fee_band_candidate)
-            sponsor_page = any("sponsor" in text.casefold() for text in page_texts)
+            sponsor_page = any("sponsor" in text.casefold() for text in native_texts)
             if trace_enabled or sponsor_page:
                 words = ocr_words(ImageEnhance.Contrast(ImageOps.grayscale(image)).enhance(1.5))
                 # Use the ordinary whole-page OCR as the layout classifier;
@@ -943,7 +1163,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
                 )
                 sponsor_roi_candidates.extend(sponsor_candidates)
             if trace_enabled:
-                diagnostics = page_diagnostics(image, page_number)
+                diagnostics = page_diagnostics(image, page_number, orientation_correction)
                 page_candidates = sponsor_candidates + tuple(
                     candidate
                     for proposal in proposals
@@ -963,6 +1183,21 @@ def predict(pdf_path: Path) -> dict[str, object]:
     if trace_enabled:
         write_trace(pdf_path, trace_pages, resolve_candidate_ledger(trace_candidates))
     row = {field: choose(field, evidence[field]) for field in FIELDS}
+    retry_row = {field: choose(field, retry_evidence[field]) for field in FIELDS}
+    for field in FIELDS:
+        if row[field] == DEFAULTS[field] and retry_row[field] != DEFAULTS[field]:
+            row[field] = retry_row[field]
+    retry_adverse = retry_row["risk_flags"]
+    if retry_adverse != "none":
+        native_adverse = row["risk_flags"] if row["risk_flags"] != "none" else ""
+        row["risk_flags"] = "|".join(sorted(set(filter(None, (native_adverse + "|" + retry_adverse).split("|")))))
+    if len(sponsor_applicant_candidates) == 1:
+        attested_applicant = next(iter(sponsor_applicant_candidates))
+        agreement = SequenceMatcher(
+            None, row["applicant_name"].casefold(), attested_applicant.casefold()
+        ).ratio()
+        if row["applicant_name"] == DEFAULTS["applicant_name"] or agreement >= 0.60:
+            row["applicant_name"] = attested_applicant
     if row["sponsor_id"] == DEFAULTS["sponsor_id"]:
         recovered_sponsor = corroborated_sponsor_fallback(
             resolve_candidate_ledger(sponsor_roi_candidates),
@@ -985,12 +1220,18 @@ def predict(pdf_path: Path) -> dict[str, object]:
             fuzzy = fuzzy_visible_category_candidate(visible_ocr_texts, field)
             if fuzzy:
                 row[field] = fuzzy
+        retry_candidates = retry_category_candidates[field]
+        if len(retry_candidates) == 1 and (
+            row[field] == DEFAULTS[field]
+            or (field in {"species_code", "home_world"} and row[field] not in CATEGORY_VOCABULARY[field])
+        ):
+            row[field] = next(iter(retry_candidates))
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])
     finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
     visible_clean_biometrics = any(
         item.source == "biometric" and item.value == "none"
-        for item in evidence["risk_flags"]
+        for item in evidence["risk_flags"] + retry_evidence["risk_flags"]
     )
     visible_paid_fee = row["fee_status"] == "paid"
     explicit_manual_approval = (
@@ -1005,7 +1246,7 @@ def predict(pdf_path: Path) -> dict[str, object]:
             stale = False
         trusted_stale_arrival = stale and any(
             item.value == row["visa_class"] and item.source in {"intake", "sponsor"}
-            for item in evidence["visa_class"]
+            for item in evidence["visa_class"] + retry_evidence["visa_class"]
         )
     adjudication, confidence = decide(
         row,
@@ -1016,6 +1257,33 @@ def predict(pdf_path: Path) -> dict[str, object]:
         trusted_stale_arrival=trusted_stale_arrival,
         unresolved_manual_note=saw_manual_note_page and not manual_findings,
     )
+    denial_probability = visible_ocr_denial_probability(model_ocr_texts)
+    if (
+        adjudication == "NEEDS_REVIEW"
+        and denial_probability >= float(DENIAL_TEXT_MODEL.get("threshold", 1.0))
+    ):
+        adjudication, confidence = "DENIED", 0.87
+    approval_probability = visible_ocr_approval_probability(model_ocr_texts)
+    folded_model_text = normalized_anchor("\n".join(model_ocr_texts))
+    affirmative_clean_biometrics = (
+        "observed flags none" in folded_model_text
+        or "risk flags none" in folded_model_text
+    )
+    if (
+        adjudication == "NEEDS_REVIEW"
+        and approval_probability >= float(APPROVAL_TEXT_MODEL.get("threshold", 1.0))
+    ):
+        adjudication, confidence = "APPROVED", 0.97
+    elif (
+        adjudication == "NEEDS_REVIEW"
+        and paired_approval_recovery(
+            row,
+            approval_probability=approval_probability,
+            denial_probability=denial_probability,
+            affirmative_clean_biometrics=affirmative_clean_biometrics,
+        )
+    ):
+        adjudication, confidence = "APPROVED", 0.94
     return {"case_id": pdf_path.stem, **row, "adjudication": adjudication, "confidence": confidence}
 
 

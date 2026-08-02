@@ -1,0 +1,47 @@
+{
+  "cases": 1000,
+  "field_misses": 1975,
+  "by_field": {
+    "applicant_name": {
+      "not_recovered_by_whole_page_ocr": 81,
+      "binding_or_resolution": 208,
+      "near_ocr_read": 38
+    },
+    "species_code": {
+      "not_recovered_by_whole_page_ocr": 77
+    },
+    "home_world": {
+      "not_recovered_by_whole_page_ocr": 113
+    },
+    "visa_class": {
+      "not_recovered_by_whole_page_ocr": 136,
+      "binding_or_resolution": 28,
+      "near_ocr_read": 15
+    },
+    "sponsor_id": {
+      "not_recovered_by_whole_page_ocr": 126,
+      "near_ocr_read": 24,
+      "binding_or_resolution": 74
+    },
+    "arrival_date": {
+      "not_recovered_by_whole_page_ocr": 130,
+      "binding_or_resolution": 58,
+      "near_ocr_read": 37
+    },
+    "declared_purpose": {
+      "binding_or_resolution": 74,
+      "not_recovered_by_whole_page_ocr": 112,
+      "near_ocr_read": 12
+    },
+    "risk_flags": {
+      "not_recovered_by_whole_page_ocr": 217,
+      "binding_or_resolution": 17,
+      "near_ocr_read": 11
+    },
+    "fee_status": {
+      "not_recovered_by_whole_page_ocr": 355,
+      "binding_or_resolution": 14,
+      "near_ocr_read": 18
+    }
+  }
+}
