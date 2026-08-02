@@ -148,6 +148,12 @@ class VisiblePipelineTests(unittest.TestCase):
             solution.exact_manual_finding("Manual Adjudicator Note\nSAMPLE DENIAL"),
             "",
         )
+        self.assertEqual(
+            solution.exact_manual_finding(
+                "degraded page\nFinding: APPROVED. Reason: signed exception-qualified packet"
+            ),
+            "APPROVED",
+        )
 
     def test_manual_approval_overrides_missing_lower_priority_fields(self):
         row = dict(solution.DEFAULTS)
@@ -172,6 +178,17 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(
             solution.decide(
                 incomplete,
+                "",
+                visible_clean_biometrics=False,
+                visible_paid_fee=False,
+                explicit_manual_approval=True,
+            )[0],
+            "APPROVED",
+        )
+        exception = dict(row, fee_status="unpaid", visa_class="TRANSIT-7")
+        self.assertEqual(
+            solution.decide(
+                exception,
                 "",
                 visible_clean_biometrics=False,
                 visible_paid_fee=False,
@@ -476,15 +493,40 @@ class VisiblePipelineTests(unittest.TestCase):
         self.assertEqual(solution.choose("applicant_name", options), "Veenax Ixoal")
 
     def test_sponsor_attestation_sentence_exposes_only_its_named_applicant(self):
+        text = (
+            "Sponsor SPN-1234 attests that Veenax Ixoul is expected on Earth for research. "
+            "The sponsor accepts responsibility for class DIP-1 compliance."
+        )
         self.assertEqual(
-            solution.sponsor_attested_applicant(
-                "Sponsor SPN-1234 attests that Veenax Ixoul is expected on Earth for research."
-            ),
+            solution.sponsor_attestation(text),
+            ("SPN-1234", "Veenax Ixoul"),
+        )
+        self.assertEqual(
+            solution.sponsor_attested_details(text),
+            ("SPN-1234", "Veenax Ixoul", "research", "DIP-1"),
+        )
+        self.assertEqual(
+            solution.sponsor_attested_applicant(text),
             "Veenax Ixoul",
         )
         self.assertEqual(
             solution.sponsor_attested_applicant("Applicant Veenax Ixoul is expected on Earth."),
             "",
+        )
+        self.assertEqual(
+            solution.sponsor_attested_details(
+                "Sponsor SPN-1234 attests that Veenax Ixoul is expected."
+            ),
+            ("SPN-1234", "Veenax Ixoul", "", ""),
+        )
+
+    def test_approximate_applicant_labels_are_conflict_evidence_only(self):
+        self.assertEqual(
+            solution.approximate_labeled_applicants(
+                "Case ID: MIB-000243 | Appiant® Lunax Oriul\n"
+                "ppiicant! Lunax Oriul"
+            ),
+            {"Lunax Oriul"},
         )
 
     def test_sponsor_fallback_requires_two_high_quality_distinct_native_crops(self):

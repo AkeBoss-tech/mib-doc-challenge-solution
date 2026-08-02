@@ -51,3 +51,8 @@ zero catastrophic false approvals, and clear the full Docker gate.
   regressions and recovered one risk flag. Holdout improved eight fields,
   recovered one correct approval, and had zero catastrophic false approvals.
   It remains pending a full Docker gate.
+- The current full-Docker checkpoint is `125.593785` with `1000 / 1000` valid
+  records and zero catastrophic false approvals. Applicant-bound sponsor prose
+  and exact visible manual findings changed 45 names, 26 purposes, 15 sponsors,
+  13 visa classes, and 6 adjudications; every change was correct across the
+  development/holdout split, with no formerly correct value displaced.

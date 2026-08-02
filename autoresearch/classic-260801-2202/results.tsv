@@ -13,3 +13,5 @@ iteration	lever	total	extraction	classification	calibration	cfa	status
 11	crossfit_dynamic_review_calibration					0	reject_negligible_oof_brier_gain
 12	selective_degraded_page_retry					0	reject_negligible_dev_only_gain
 13	validated_124_stack	124.514335	40.451111	67.850000	16.213224	0	validated_full_docker
+14	applicant_bound_attestation_manual_authority	125.593785	40.943333	68.270000	16.380452	0	validated_full_docker
+15	high_contrast_fee_band					0	reject_holdout_wrong_reads_and_negligible_safe_gain

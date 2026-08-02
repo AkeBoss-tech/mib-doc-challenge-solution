@@ -934,23 +934,82 @@ def parse_page(kind: str, text: str, parsed: dict[str, list[Evidence]]) -> str:
 
 
 def exact_manual_finding(text: str) -> str:
-    """Return only an explicitly labeled finding on a visible manual-note page."""
-    if page_kind(text) != "note":
-        return ""
-    value = extract_label(text, "Finding")
-    match = re.fullmatch(r"(APPROVED|DENIED|NEEDS[ _-]?REVIEW)", value, re.I)
+    """Return only an explicitly labeled finding in visible page OCR."""
+    match = re.search(
+        r"\bFinding\s*:\s*(APPROVED|DENIED|NEEDS[ _-]?REVIEW)\b",
+        text,
+        re.I,
+    )
     return match.group(1).upper().replace(" ", "_").replace("-", "_") if match else ""
 
 
-def sponsor_attested_applicant(text: str) -> str:
-    """Read the applicant from a visibly attributed sponsor attestation sentence."""
+def sponsor_attested_details(text: str) -> tuple[str, str, str, str]:
+    """Read facts bound to one visibly attributed sponsor sentence."""
     match = re.search(
-        r"\bSponsor\s+SPN[- ]?\d{4}\s+attests\s+that\s+"
+        r"\bSponsor\s+(SPN[- ]?\d{4})\s+attests\s+that\s+"
         r"([A-Z][A-Za-z]{2,20}\s+[A-Z][A-Za-z]{2,20})\s+is\s+expected\b",
         text,
         re.I,
     )
-    return clean_name(match.group(1)) if match else ""
+    if not match:
+        return "", "", "", ""
+    # Optional facts must not make the sponsor/applicant identity anchor fail.
+    # Limit their search to the nearby continuation of this one attestation.
+    continuation = text[match.end():match.end() + 600]
+    purpose_match = re.match(
+        r"\s+on\s+Earth\s+for\s+([^\.\n]{2,40})\.",
+        continuation,
+        re.I,
+    )
+    purpose_lookup = {
+        normalize_space(value).casefold(): value
+        for value in CATEGORY_VOCABULARY.get("declared_purpose", ())
+    }
+    purpose = (
+        purpose_lookup.get(normalize_space(purpose_match.group(1)).casefold(), "")
+        if purpose_match else ""
+    )
+    visa_match = re.search(
+        r"\bresponsibility\s+for\s+class\s+"
+        r"(XW[- ]?[12]|DIP[- ]?1|MED[- ]?3|TRANSIT[- ]?7)\s+compliance\b",
+        continuation,
+        re.I,
+    )
+    visa = visa_match.group(1).upper().replace(" ", "-") if visa_match else ""
+    return clean_sponsor(match.group(1)), clean_name(match.group(2)), purpose, visa
+
+
+def sponsor_attestation(text: str) -> tuple[str, str]:
+    """Read the sponsor/applicant pair from a visibly attributed sentence."""
+    sponsor, applicant, _purpose, _visa = sponsor_attested_details(text)
+    return sponsor, applicant
+
+
+def sponsor_attested_applicant(text: str) -> str:
+    return sponsor_attestation(text)[1]
+
+
+def approximate_labeled_applicants(text: str) -> set[str]:
+    """Find names after a strongly applicant-like visible label.
+
+    These approximate reads are conflict evidence only. They never populate an
+    output field, which prevents a damaged label or name from becoming truth.
+    """
+    candidates: set[str] = set()
+    for raw_line in text.splitlines():
+        words = re.sub(r"[^A-Za-z'-]+", " ", raw_line).split()
+        for index, word in enumerate(words):
+            if not 5 <= len(word) <= 12:
+                continue
+            if SequenceMatcher(None, word.casefold(), "applicant").ratio() < 0.80:
+                continue
+            value_index = index + 1
+            if value_index < len(words) and words[value_index].casefold() == "name":
+                value_index += 1
+            candidate = clean_name(" ".join(words[value_index:value_index + 2]))
+            if candidate:
+                candidates.add(candidate)
+    return candidates
 
 
 def choose(field: str, options: list[Evidence]) -> str:
@@ -1036,6 +1095,11 @@ def decide(
     unresolved_manual_note: bool = False,
 ) -> tuple[str, float]:
     flags = set(row["risk_flags"].split("|")) if row["risk_flags"] != "none" else set()
+    # An unconflicted, explicitly labeled visible finding is the highest
+    # authority in the public evidence order. It may record an exception to a
+    # lower-priority fee or visa fact, but never overrides observed risk.
+    if explicit_manual_approval and row["risk_flags"] == "none":
+        return "APPROVED", 0.98
     if (
         finding == "DENIED"
         or flags & DISQUALIFYING
@@ -1045,16 +1109,6 @@ def decide(
         return "DENIED", 0.97
     if finding == "NEEDS_REVIEW" or flags & REVIEW_FLAGS:
         return "NEEDS_REVIEW", 0.99
-    # A conflict-free labeled manual approval is higher-authority evidence than
-    # missing lower-priority form fields. Explicitly observed adverse facts and
-    # lower-priority fields still fail closed above this gate.
-    if (
-        explicit_manual_approval
-        and row["risk_flags"] == "none"
-        and row["fee_status"] != "unpaid"
-        and row["visa_class"] != "TRANSIT-7"
-    ):
-        return "APPROVED", 0.98
     if trusted_stale_arrival:
         return "DENIED", 0.97
     if row["visa_class"] not in {"unknown", "DIP-1"} and row["sponsor_id"] in STRICT_DENIAL_SPONSORS:
@@ -1087,6 +1141,8 @@ def predict(pdf_path: Path) -> dict[str, object]:
     retry_category_candidates: dict[str, set[str]] = defaultdict(set)
     whole_fee_candidates: set[str] = set()
     sponsor_applicant_candidates: set[str] = set()
+    sponsor_attestations: set[tuple[str, str, str, str]] = set()
+    approximate_applicant_candidates: set[str] = set()
     visible_ocr_texts: list[str] = []
     model_ocr_texts: list[str] = []
     trace_enabled = bool(os.environ.get("MIB_TRACE_DIR"))
@@ -1111,15 +1167,20 @@ def predict(pdf_path: Path) -> dict[str, object]:
                 *((text, retry_evidence, retry_category_candidates) for text in retry_texts),
             ):
                 visible_ocr_texts.append(text)
+                if target_evidence is evidence:
+                    approximate_applicant_candidates.update(approximate_labeled_applicants(text))
                 manual_finding = exact_manual_finding(text)
                 if manual_finding:
                     manual_findings.append(manual_finding)
                 kind = page_kind(text)
                 saw_manual_note_page |= kind == "note"
-                if target_evidence is evidence and kind == "sponsor":
-                    attested_applicant = sponsor_attested_applicant(text)
+                if target_evidence is evidence:
+                    attestation = sponsor_attested_details(text)
+                    attested_sponsor, attested_applicant, _purpose, _visa = attestation
                     if attested_applicant:
                         sponsor_applicant_candidates.add(attested_applicant)
+                    if attested_sponsor and attested_applicant:
+                        sponsor_attestations.add(attestation)
                 for field, values in visible_category_candidates(text, kind).items():
                     target_categories[field].update(values)
                 whole_fee = clean_anchored_fee_status(text)
@@ -1196,8 +1257,37 @@ def predict(pdf_path: Path) -> dict[str, object]:
         agreement = SequenceMatcher(
             None, row["applicant_name"].casefold(), attested_applicant.casefold()
         ).ratio()
-        if row["applicant_name"] == DEFAULTS["applicant_name"] or agreement >= 0.60:
+        unrelated_visible_applicant = any(
+            SequenceMatcher(None, candidate.casefold(), attested_applicant.casefold()).ratio() < 0.50
+            for candidate in approximate_applicant_candidates
+        )
+        if (
+            row["applicant_name"] == DEFAULTS["applicant_name"]
+            and not unrelated_visible_applicant
+        ) or agreement >= 0.60:
             row["applicant_name"] = attested_applicant
+    matching_attested_sponsors = {
+        sponsor
+        for sponsor, applicant, _purpose, _visa in sponsor_attestations
+        if SequenceMatcher(
+            None, row["applicant_name"].casefold(), applicant.casefold()
+        ).ratio() >= 0.85
+    }
+    if len(matching_attested_sponsors) == 1:
+        row["sponsor_id"] = next(iter(matching_attested_sponsors))
+    matching_attestations = {
+        attestation
+        for attestation in sponsor_attestations
+        if SequenceMatcher(
+            None, row["applicant_name"].casefold(), attestation[1].casefold()
+        ).ratio() >= 0.85
+    }
+    attested_purposes = {item[2] for item in matching_attestations if item[2]}
+    if len(attested_purposes) == 1:
+        row["declared_purpose"] = next(iter(attested_purposes))
+    attested_visas = {item[3] for item in matching_attestations if item[3]}
+    if len(attested_visas) == 1:
+        row["visa_class"] = next(iter(attested_visas))
     if row["sponsor_id"] == DEFAULTS["sponsor_id"]:
         recovered_sponsor = corroborated_sponsor_fallback(
             resolve_candidate_ledger(sponsor_roi_candidates),
@@ -1228,15 +1318,20 @@ def predict(pdf_path: Path) -> dict[str, object]:
             row[field] = next(iter(retry_candidates))
     for field in CATEGORY_VOCABULARY:
         row[field] = snap_category(field, row[field])
-    finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
+    manual_finding_values = set(manual_findings)
+    if len(manual_finding_values) == 1:
+        finding = next(iter(manual_finding_values))
+    elif len(manual_finding_values) > 1:
+        finding = "NEEDS_REVIEW"
+    else:
+        finding = "DENIED" if "DENIED" in findings else "NEEDS_REVIEW" if "NEEDS_REVIEW" in findings else ""
     visible_clean_biometrics = any(
         item.source == "biometric" and item.value == "none"
         for item in evidence["risk_flags"] + retry_evidence["risk_flags"]
     )
     visible_paid_fee = row["fee_status"] == "paid"
     explicit_manual_approval = (
-        bool(manual_findings)
-        and set(manual_findings) == {"APPROVED"}
+        manual_finding_values == {"APPROVED"}
     )
     trusted_stale_arrival = False
     if row["visa_class"] not in {"unknown", "DIP-1"} and row["arrival_date"] != "1900-01-01":

@@ -111,6 +111,17 @@ def main() -> None:
             "dynamic_brier": round(float(np.mean((dynamic[review_mask] - correctness[review_mask]) ** 2)), 6),
         }
     }, separators=(",", ":")))
+    learned_denials = np.asarray([
+        pred[x]["adjudication"] == "DENIED" and float(pred[x]["confidence"]) == 0.87
+        for x in ids
+    ])
+    for threshold in (0.50, 0.60, 0.65, 0.70, 0.75):
+        routed = learned_denials & (approval >= threshold)
+        counts = {value: int(np.sum(routed & (actual == value))) for value in ("APPROVED", "NEEDS_REVIEW", "DENIED")}
+        print(json.dumps({"learned_denial_veto_approval_min": threshold,
+                          "routed": int(np.sum(routed)), "counts": counts,
+                          "classification_raw_gain": 2 * counts["APPROVED"] + 7 * counts["NEEDS_REVIEW"] - 6 * counts["DENIED"]},
+                         separators=(",", ":")))
 
 
 if __name__ == "__main__":
