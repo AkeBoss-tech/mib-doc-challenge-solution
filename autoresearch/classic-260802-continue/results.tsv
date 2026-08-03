@@ -2,3 +2,4 @@ iteration	lever	development_gain	holdout_gain	full_score	cfa	verdict
 0	validated_submission_baseline	0	0	131.552714	0	keep
 1	missing_core_review_calibration	positive_brier	positive_brier	131.559338	0	keep
 2	crossfit_approval_router	insufficient	insufficient	131.559338	0	discard_review_false_approvals_no_grouped_gain
+3	lowered_risk_recovery_thresholds	positive	positive	131.781560	0	keep
