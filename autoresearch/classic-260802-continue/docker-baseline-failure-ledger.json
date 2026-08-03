@@ -1,0 +1,630 @@
+{
+  "decision_confusion": {
+    "APPROVED->APPROVED": 145,
+    "APPROVED->DENIED": 10,
+    "APPROVED->NEEDS_REVIEW": 134,
+    "DENIED->DENIED": 419,
+    "DENIED->NEEDS_REVIEW": 12,
+    "NEEDS_REVIEW->APPROVED": 2,
+    "NEEDS_REVIEW->DENIED": 10,
+    "NEEDS_REVIEW->NEEDS_REVIEW": 268
+  },
+  "examples": {
+    "applicant_name": [
+      {
+        "case_id": "MIB-000003",
+        "expected": "Solix Qorquell",
+        "predicted": "Oritari Veezarn"
+      },
+      {
+        "case_id": "MIB-000016",
+        "expected": "Veenax Aritari",
+        "predicted": "Nexix Ixoul"
+      },
+      {
+        "case_id": "MIB-000018",
+        "expected": "Luzarn Qortari",
+        "predicted": "Qortari Ix"
+      },
+      {
+        "case_id": "MIB-000023",
+        "expected": "Veetari Xankesh",
+        "predicted": "unknown"
+      },
+      {
+        "case_id": "MIB-000029",
+        "expected": "Luzarn Oriquell",
+        "predicted": "Name Cut Out"
+      },
+      {
+        "case_id": "MIB-000032",
+        "expected": "Arinax Qormora",
+        "predicted": "Xannax Qormora"
+      },
+      {
+        "case_id": "MIB-000046",
+        "expected": "Ixomora Nexnax",
+        "predicted": "Name Cut Out"
+      },
+      {
+        "case_id": "MIB-000056",
+        "expected": "Veerix Xanvara",
+        "predicted": "Veerix Xanix"
+      },
+      {
+        "case_id": "MIB-000058",
+        "expected": "Veeul Ixoul",
+        "predicted": "Name Cut Out"
+      },
+      {
+        "case_id": "MIB-000064",
+        "expected": "Zaquell Lukesh",
+        "predicted": "Zamora Xannax"
+      },
+      {
+        "case_id": "MIB-000065",
+        "expected": "Veezarn Tekzarn",
+        "predicted": "unknown"
+      },
+      {
+        "case_id": "MIB-000067",
+        "expected": "Veeul Arivara",
+        "predicted": "Name Cut Out"
+      }
+    ],
+    "arrival_date": [
+      {
+        "case_id": "MIB-000003",
+        "expected": "2026-03-15",
+        "predicted": "2026-03-16"
+      },
+      {
+        "case_id": "MIB-000010",
+        "expected": "2026-03-13",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000012",
+        "expected": "2026-07-07",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000013",
+        "expected": "2026-01-31",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000016",
+        "expected": "2026-04-09",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000023",
+        "expected": "2025-10-12",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000044",
+        "expected": "2026-05-01",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000045",
+        "expected": "2026-05-31",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000056",
+        "expected": "2026-02-26",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000063",
+        "expected": "2026-02-11",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000071",
+        "expected": "2026-03-18",
+        "predicted": "1900-01-01"
+      },
+      {
+        "case_id": "MIB-000074",
+        "expected": "2026-06-13",
+        "predicted": "1900-01-01"
+      }
+    ],
+    "declared_purpose": [
+      {
+        "case_id": "MIB-000032",
+        "expected": "reactor maintenance",
+        "predicted": "transit"
+      },
+      {
+        "case_id": "MIB-000071",
+        "expected": "research",
+        "predicted": "transit"
+      },
+      {
+        "case_id": "MIB-000074",
+        "expected": "research",
+        "predicted": "xenobotany"
+      },
+      {
+        "case_id": "MIB-000140",
+        "expected": "translation",
+        "predicted": "field repair"
+      },
+      {
+        "case_id": "MIB-000146",
+        "expected": "medical consult",
+        "predicted": "archive audit"
+      },
+      {
+        "case_id": "MIB-000222",
+        "expected": "archive audit",
+        "predicted": "transit"
+      },
+      {
+        "case_id": "MIB-000226",
+        "expected": "reactor maintenance",
+        "predicted": "transit"
+      },
+      {
+        "case_id": "MIB-000237",
+        "expected": "reactor maintenance",
+        "predicted": "transit"
+      },
+      {
+        "case_id": "MIB-000276",
+        "expected": "cultural exchange",
+        "predicted": "translation"
+      },
+      {
+        "case_id": "MIB-000279",
+        "expected": "cultural exchange",
+        "predicted": "reactor maintenance"
+      },
+      {
+        "case_id": "MIB-000340",
+        "expected": "field repair",
+        "predicted": "diplomatic"
+      },
+      {
+        "case_id": "MIB-000342",
+        "expected": "archive audit",
+        "predicted": "xenobotany"
+      }
+    ],
+    "fee_status": [
+      {
+        "case_id": "MIB-000008",
+        "expected": "unknown",
+        "predicted": "paid"
+      },
+      {
+        "case_id": "MIB-000018",
+        "expected": "waived",
+        "predicted": "paid"
+      },
+      {
+        "case_id": "MIB-000025",
+        "expected": "unknown",
+        "predicted": "waived"
+      },
+      {
+        "case_id": "MIB-000026",
+        "expected": "unpaid",
+        "predicted": "unknown"
+      },
+      {
+        "case_id": "MIB-000030",
+        "expected": "waived",
+        "predicted": "paid"
+      },
+      {
+        "case_id": "MIB-000031",
+        "expected": "waived",
+        "predicted": "paid"
+      },
+      {
+        "case_id": "MIB-000042",
+        "expected": "waived",
+        "predicted": "unknown"
+      },
+      {
+        "case_id": "MIB-000045",
+        "expected": "unknown",
+        "predicted": "paid"
+      },
+      {
+        "case_id": "MIB-000056",
+        "expected": "waived",
+        "predicted": "paid"
+      },
+      {
+        "case_id": "MIB-000058",
+        "expected": "waived",
+        "predicted": "unpaid"
+      },
+      {
+        "case_id": "MIB-000061",
+        "expected": "waived",
+        "predicted": "paid"
+      },
+      {
+        "case_id": "MIB-000063",
+        "expected": "paid",
+        "predicted": "waived"
+      }
+    ],
+    "home_world": [
+      {
+        "case_id": "MIB-000046",
+        "expected": "Proxima-b",
+        "predicted": "Wolf-1061c"
+      },
+      {
+        "case_id": "MIB-000065",
+        "expected": "Proxima-b",
+        "predicted": "Wolf-1061c"
+      },
+      {
+        "case_id": "MIB-000124",
+        "expected": "Sirius Outpost",
+        "predicted": "Wolf-1061c"
+      },
+      {
+        "case_id": "MIB-000134",
+        "expected": "TRAPPIST-1e",
+        "predicted": "Wolf-1061c"
+      },
+      {
+        "case_id": "MIB-000138",
+        "expected": "Europa Station",
+        "predicted": "Mars Dome-7"
+      },
+      {
+        "case_id": "MIB-000140",
+        "expected": "Luyten-b",
+        "predicted": "Wolf-1061c"
+      },
+      {
+        "case_id": "MIB-000141",
+        "expected": "Mars Dome-7",
+        "predicted": "Wolf-1061c"
+      },
+      {
+        "case_id": "MIB-000156",
+        "expected": "Proxima-b",
+        "predicted": "Gliese-581g"
+      },
+      {
+        "case_id": "MIB-000157",
+        "expected": "Zeta Reticuli",
+        "predicted": "Barnard-c"
+      },
+      {
+        "case_id": "MIB-000218",
+        "expected": "Proxima-b",
+        "predicted": "Luyten-b"
+      },
+      {
+        "case_id": "MIB-000221",
+        "expected": "Kepler-186f",
+        "predicted": "Wolf-1061c"
+      },
+      {
+        "case_id": "MIB-000222",
+        "expected": "Mars Dome-7",
+        "predicted": "Wolf-1061c"
+      }
+    ],
+    "risk_flags": [
+      {
+        "case_id": "MIB-000003",
+        "expected": "illegible_biometrics|sponsor_mismatch",
+        "predicted": "illegible_biometrics"
+      },
+      {
+        "case_id": "MIB-000016",
+        "expected": "illegible_biometrics|sponsor_mismatch",
+        "predicted": "sponsor_mismatch"
+      },
+      {
+        "case_id": "MIB-000023",
+        "expected": "illegible_biometrics",
+        "predicted": "none"
+      },
+      {
+        "case_id": "MIB-000042",
+        "expected": "biohazard_red",
+        "predicted": "none"
+      },
+      {
+        "case_id": "MIB-000048",
+        "expected": "rescinded_denial",
+        "predicted": "none"
+      },
+      {
+        "case_id": "MIB-000070",
+        "expected": "illegible_biometrics|planetary_embargo",
+        "predicted": "planetary_embargo"
+      },
+      {
+        "case_id": "MIB-000072",
+        "expected": "illegible_biometrics",
+        "predicted": "none"
+      },
+      {
+        "case_id": "MIB-000073",
+        "expected": "illegible_biometrics|planetary_embargo",
+        "predicted": "planetary_embargo"
+      },
+      {
+        "case_id": "MIB-000085",
+        "expected": "biohazard_red",
+        "predicted": "none"
+      },
+      {
+        "case_id": "MIB-000087",
+        "expected": "rescinded_denial",
+        "predicted": "none"
+      },
+      {
+        "case_id": "MIB-000088",
+        "expected": "illegible_biometrics",
+        "predicted": "none"
+      },
+      {
+        "case_id": "MIB-000094",
+        "expected": "biohazard_red",
+        "predicted": "none"
+      }
+    ],
+    "species_code": [
+      {
+        "case_id": "MIB-000008",
+        "expected": "JOVIAN_GASFORM",
+        "predicted": "ORION_GRAYS"
+      },
+      {
+        "case_id": "MIB-000091",
+        "expected": "AQUARIAN_MANTIS",
+        "predicted": "CENTAURI_SYNTH"
+      },
+      {
+        "case_id": "MIB-000134",
+        "expected": "AQUARIAN_MANTIS",
+        "predicted": "LUNA_SECURID"
+      },
+      {
+        "case_id": "MIB-000342",
+        "expected": "JOVIAN_GASFORM",
+        "predicted": "TRIANGULAN"
+      },
+      {
+        "case_id": "MIB-000436",
+        "expected": "LUNA_SECURID",
+        "predicted": "CENTAURI_SYNTH"
+      },
+      {
+        "case_id": "MIB-000513",
+        "expected": "VENUSIAN_MYCELIAL",
+        "predicted": "TRIANGULAN"
+      },
+      {
+        "case_id": "MIB-000591",
+        "expected": "VENUSIAN_MYCELIAL",
+        "predicted": "ORION_GRAYS"
+      },
+      {
+        "case_id": "MIB-000618",
+        "expected": "VENUSIAN_MYCELIAL",
+        "predicted": "TRIANGULAN"
+      },
+      {
+        "case_id": "MIB-000694",
+        "expected": "JOVIAN_GASFORM",
+        "predicted": "TRIANGULAN"
+      },
+      {
+        "case_id": "MIB-000774",
+        "expected": "LUNA_SECURID",
+        "predicted": "TRIANGULAN"
+      },
+      {
+        "case_id": "MIB-000860",
+        "expected": "ANDROMEDAN",
+        "predicted": "TRIANGULAN"
+      },
+      {
+        "case_id": "MIB-000979",
+        "expected": "ALPHA_DRACONIAN",
+        "predicted": "LUNA_SECURID"
+      }
+    ],
+    "sponsor_id": [
+      {
+        "case_id": "MIB-000003",
+        "expected": "SPN-6799",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000008",
+        "expected": "SPN-2913",
+        "predicted": "SPN-2513"
+      },
+      {
+        "case_id": "MIB-000016",
+        "expected": "SPN-5689",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000019",
+        "expected": "SPN-8746",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000027",
+        "expected": "SPN-1345",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000030",
+        "expected": "SPN-5809",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000032",
+        "expected": "SPN-7340",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000038",
+        "expected": "SPN-8960",
+        "predicted": "SPN-8880"
+      },
+      {
+        "case_id": "MIB-000039",
+        "expected": "SPN-8802",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000045",
+        "expected": "SPN-3847",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000047",
+        "expected": "SPN-3799",
+        "predicted": "SPN-0000"
+      },
+      {
+        "case_id": "MIB-000051",
+        "expected": "SPN-1439",
+        "predicted": "SPN-0000"
+      }
+    ],
+    "visa_class": [
+      {
+        "case_id": "MIB-000018",
+        "expected": "XW-1",
+        "predicted": "DIP-1"
+      },
+      {
+        "case_id": "MIB-000027",
+        "expected": "XW-2",
+        "predicted": "XW-1"
+      },
+      {
+        "case_id": "MIB-000032",
+        "expected": "XW-2",
+        "predicted": "DIP-1"
+      },
+      {
+        "case_id": "MIB-000039",
+        "expected": "MED-3",
+        "predicted": "DIP-1"
+      },
+      {
+        "case_id": "MIB-000065",
+        "expected": "XW-1",
+        "predicted": "DIP-1"
+      },
+      {
+        "case_id": "MIB-000096",
+        "expected": "DIP-1",
+        "predicted": "MED-3"
+      },
+      {
+        "case_id": "MIB-000097",
+        "expected": "XW-2",
+        "predicted": "XW-1"
+      },
+      {
+        "case_id": "MIB-000118",
+        "expected": "DIP-1",
+        "predicted": "MED-3"
+      },
+      {
+        "case_id": "MIB-000140",
+        "expected": "XW-1",
+        "predicted": "MED-3"
+      },
+      {
+        "case_id": "MIB-000143",
+        "expected": "MED-3",
+        "predicted": "DIP-1"
+      },
+      {
+        "case_id": "MIB-000156",
+        "expected": "DIP-1",
+        "predicted": "XW-2"
+      },
+      {
+        "case_id": "MIB-000167",
+        "expected": "MED-3",
+        "predicted": "TRANSIT-7"
+      }
+    ]
+  },
+  "fields": {
+    "applicant_name": {
+      "exact": 856,
+      "misses": 144,
+      "nondefault_wrong_misses": 123,
+      "sentinel_misses": 21
+    },
+    "arrival_date": {
+      "exact": 873,
+      "misses": 127,
+      "nondefault_wrong_misses": 15,
+      "sentinel_misses": 112
+    },
+    "declared_purpose": {
+      "exact": 964,
+      "misses": 36,
+      "nondefault_wrong_misses": 36,
+      "sentinel_misses": 0
+    },
+    "fee_status": {
+      "exact": 872,
+      "misses": 128,
+      "nondefault_wrong_misses": 111,
+      "sentinel_misses": 17
+    },
+    "home_world": {
+      "exact": 944,
+      "misses": 56,
+      "nondefault_wrong_misses": 56,
+      "sentinel_misses": 0
+    },
+    "risk_flags": {
+      "exact": 876,
+      "misses": 124,
+      "nondefault_wrong_misses": 27,
+      "sentinel_misses": 97
+    },
+    "species_code": {
+      "exact": 988,
+      "misses": 12,
+      "nondefault_wrong_misses": 12,
+      "sentinel_misses": 0
+    },
+    "sponsor_id": {
+      "exact": 859,
+      "misses": 141,
+      "nondefault_wrong_misses": 41,
+      "sentinel_misses": 100
+    },
+    "visa_class": {
+      "exact": 942,
+      "misses": 58,
+      "nondefault_wrong_misses": 58,
+      "sentinel_misses": 0
+    }
+  },
+  "prediction_rows": 1000,
+  "rows": 1000
+}

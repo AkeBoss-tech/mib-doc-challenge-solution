@@ -1,0 +1,3 @@
+iteration	lever	development_gain	holdout_gain	full_score	cfa	verdict
+0	validated_submission_baseline	0	0	131.552714	0	keep
+1	missing_core_review_calibration	positive_brier	positive_brier	131.559338	0	keep

@@ -1513,7 +1513,7 @@ def decide(
     if row["visa_class"] not in {"unknown", "DIP-1"} and strict_revocation:
         return "DENIED", 0.97
     if row["visa_class"] == "unknown" or row["arrival_date"] == "1900-01-01" or row["fee_status"] == "unknown":
-        return "NEEDS_REVIEW", 0.45
+        return "NEEDS_REVIEW", 0.47
     if row["visa_class"] != "DIP-1" and row["sponsor_id"] in {"SPN-0000", *REVOKED_SPONSORS}:
         return "NEEDS_REVIEW", 0.0
     if row["fee_status"] == "waived" and row["visa_class"] != "DIP-1":
